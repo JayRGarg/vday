@@ -144,7 +144,7 @@ void GameEngine::StepSimulation(float dt) {
 
   snapshot_.notes.erase(
       std::remove_if(snapshot_.notes.begin(), snapshot_.notes.end(), [&](const Note& n) {
-        return n.y >= snapshot_.height - 1;
+        return static_cast<int>(n.y) >= snapshot_.height - 3;
       }),
       snapshot_.notes.end());
 
@@ -186,11 +186,13 @@ void GameEngine::SpawnNote() {
 }
 
 int GameEngine::CatchOrMiss(Note& note) {
-  if (note.y < snapshot_.height - 1) {
+  const int catcher_row = snapshot_.height - 3;
+  const int note_row = static_cast<int>(note.y);
+  if (note_row < catcher_row) {
     return -1;
   }
 
-  if (note.x == snapshot_.player_x) {
+  if (note.x >= snapshot_.player_x - 1 && note.x <= snapshot_.player_x + 1) {
     int delta = ScoreFor(note.type);
     snapshot_.score += delta;
     if (note.type == ItemType::BrokenHeart) {

@@ -102,15 +102,15 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
 
   int catcher_y = 1 + snapshot.height - 3;
   int catcher_x = 1 + snapshot.player_x;
-  const std::string catcher = "\xE2\x96\x82\xE2\x96\x88\xE2\x96\x82";  // ▂█▂
-  int start_x = catcher_x - 1;
+  int start_x = catcher_x - 2;
   if (start_x < 1) {
     start_x = 1;
   }
-  if (start_x > snapshot.width - 2) {
-    start_x = snapshot.width - 2;
+  if (start_x > snapshot.width - 4) {
+    start_x = snapshot.width - 4;
   }
-  canvas.DrawText(start_x, catcher_y, catcher, Color::CyanLight);
+  // Draw catcher as a single token to avoid terminal-specific per-cell artifacts.
+  canvas.DrawText(start_x, catcher_y, "|___|", Color::CyanLight);
   return ftxui::canvas(std::move(canvas));
 }
 

@@ -24,7 +24,7 @@ add_executable(valentine_tui
 
 target_include_directories(valentine_tui PRIVATE src)
 
-if(SDL2_FOUND AND SDL2_MIXER_FOUND)
+if(SDL2_FOUND AND SDL2_mixer_FOUND)
   target_compile_definitions(valentine_tui PRIVATE HAVE_SDL2_MIXER=1)
   target_link_libraries(valentine_tui PRIVATE SDL2::SDL2 SDL2_mixer::SDL2_mixer)
 endif()

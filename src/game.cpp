@@ -5,6 +5,26 @@
 
 namespace vday {
 
+namespace {
+
+int CatcherStartColumn(int player_x, int width) {
+  int start = player_x - 2;  // center-aligned |___| in board coordinates
+  if (start < 0) {
+    start = 0;
+  }
+  if (start > width - 5) {
+    start = width - 5;
+  }
+  return start;
+}
+
+int VisualWidth(ItemType type) {
+  // Most emoji render as two terminal cells; heart is a single cell.
+  return type == ItemType::Heart ? 1 : 2;
+}
+
+}  // namespace
+
 GameEngine::GameEngine() {
   std::random_device rd;
   rng_ = std::mt19937(rd());
@@ -43,6 +63,7 @@ void GameEngine::Reset() {
   snapshot_.misses = 0;
   snapshot_.paused = false;
   snapshot_.unlocked_chunks = 0;
+  snapshot_.catcher_flash_frames = 0;
   snapshot_.player_x = snapshot_.width / 2;
   spawn_timer_ = 0.0f;
   input_queue_.Clear();
@@ -110,6 +131,7 @@ void GameEngine::HandleInput(InputAction action) {
     snapshot_.misses = 0;
     snapshot_.paused = false;
     snapshot_.unlocked_chunks = 0;
+    snapshot_.catcher_flash_frames = 0;
     snapshot_.player_x = snapshot_.width / 2;
     spawn_timer_ = 0.0f;
   }
@@ -119,6 +141,9 @@ void GameEngine::StepSimulation(float dt) {
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
   if (snapshot_.paused) {
     return;
+  }
+  if (snapshot_.catcher_flash_frames > 0) {
+    snapshot_.catcher_flash_frames -= 1;
   }
 
   spawn_timer_ += dt;
@@ -155,6 +180,7 @@ void GameEngine::StepSimulation(float dt) {
   }
 
   if (caught > 0) {
+    snapshot_.catcher_flash_frames = 10;
     audio_queue_.Push(AudioCommand{AudioCommandType::PlayCatch, false});
   }
 
@@ -192,7 +218,16 @@ int GameEngine::CatchOrMiss(Note& note) {
     return -1;
   }
 
-  if (note.x >= snapshot_.player_x - 1 && note.x <= snapshot_.player_x + 1) {
+  const int catcher_start = CatcherStartColumn(snapshot_.player_x, snapshot_.width);
+  const int catcher_inner_left = catcher_start + 1;
+  const int catcher_inner_right = catcher_start + 3;
+
+  const int note_left = note.x;
+  const int note_right = note.x + VisualWidth(note.type) - 1;
+  const bool overlaps_catcher =
+      note_left <= catcher_inner_right && note_right >= catcher_inner_left;
+
+  if (overlaps_catcher) {
     int delta = ScoreFor(note.type);
     snapshot_.score += delta;
     if (note.type == ItemType::BrokenHeart) {

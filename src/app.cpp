@@ -81,7 +81,7 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
     Color color = Color::White;
     switch (note.type) {
       case ItemType::Heart:
-        symbol = "\xE2\x99\xA5";  // ♥
+        symbol = "\xF0\x9F\x92\x96";  // 💖
         color = Color::RedLight;
         break;
       case ItemType::LoveNote:
@@ -97,7 +97,11 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
         color = Color::GrayLight;
         break;
     }
-    canvas.DrawText(1 + note.x, 1 + y, symbol, color);
+    int draw_x = 1 + note.x;
+    if (draw_x > snapshot.width - 1) {
+      draw_x = snapshot.width - 1;
+    }
+    canvas.DrawText(draw_x, 1 + y, symbol, color);
   }
 
   int catcher_y = 1 + snapshot.height - 3;
@@ -109,8 +113,14 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
   if (start_x > snapshot.width - 4) {
     start_x = snapshot.width - 4;
   }
+  const bool catcher_flash = snapshot.catcher_flash_frames > 0;
+  const Color catcher_color = catcher_flash ? Color::YellowLight : Color::CyanLight;
   // Draw catcher as a single token to avoid terminal-specific per-cell artifacts.
-  canvas.DrawText(start_x, catcher_y, "|___|", Color::CyanLight);
+  canvas.DrawText(start_x, catcher_y, "|___|", catcher_color);
+  if (catcher_flash && catcher_y > 1) {
+    const std::string sparkle = (snapshot.catcher_flash_frames % 2 == 0) ? " * " : " + ";
+    canvas.DrawText(start_x + 1, catcher_y - 1, sparkle, Color::White);
+  }
   return ftxui::canvas(std::move(canvas));
 }
 

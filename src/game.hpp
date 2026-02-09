@@ -40,6 +40,7 @@ struct GameSnapshot {
   int streak = 0;
   int misses = 0;
   int unlocked_chunks = 0;
+  int catcher_flash_frames = 0;
   std::vector<Note> notes;
 };
 

@@ -8,7 +8,7 @@ namespace vday {
 namespace {
 
 constexpr int kCatcherWidth = 5;
-constexpr int kCatcherWallMargin = 1;
+constexpr int kCatcherWallMargin = 0;
 
 int MinCatcherStart(int width) {
   (void)width;
@@ -35,6 +35,10 @@ int MaxPlayerX(int width) {
 
 int CatcherStartColumn(int player_x, int width) {
   return std::clamp(player_x - 2, MinCatcherStart(width), MaxCatcherStart(width));
+}
+
+int CatcherRow(int height) {
+  return height - 1;
 }
 
 int ItemVisualWidth(ItemType type) {
@@ -192,7 +196,7 @@ void GameEngine::StepSimulation(float dt) {
 
   snapshot_.notes.erase(
       std::remove_if(snapshot_.notes.begin(), snapshot_.notes.end(), [&](const Note& n) {
-        return static_cast<int>(n.y) >= snapshot_.height - 3;
+        return static_cast<int>(n.y) >= CatcherRow(snapshot_.height);
       }),
       snapshot_.notes.end());
 
@@ -236,7 +240,7 @@ void GameEngine::SpawnNote() {
 }
 
 int GameEngine::CatchOrMiss(Note& note) {
-  const int catcher_row = snapshot_.height - 3;
+  const int catcher_row = CatcherRow(snapshot_.height);
   const int note_row = static_cast<int>(note.y);
   if (note_row < catcher_row) {
     return -1;

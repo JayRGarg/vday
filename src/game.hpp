@@ -67,6 +67,7 @@ struct AudioCommand {
 };
 
 int CatcherStartColumn(int player_x, int width);
+int CatcherRow(int height);
 int ItemVisualWidth(ItemType type);
 
 class GameEngine {

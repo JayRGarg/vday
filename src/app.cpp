@@ -109,7 +109,7 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
     canvas.DrawText(cx(draw_x), cy(1 + y), symbol, color);
   }
 
-  int catcher_y = 1 + snapshot.height - 3;
+  int catcher_y = 1 + CatcherRow(snapshot.height);
   int start_x = 1 + CatcherStartColumn(snapshot.player_x, snapshot.width);
   const bool catcher_flash = snapshot.catcher_flash_frames > 0;
   const Color catcher_color = catcher_flash ? Color::YellowLight : Color::CyanLight;

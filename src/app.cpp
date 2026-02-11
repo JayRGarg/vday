@@ -97,22 +97,14 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
         color = Color::GrayLight;
         break;
     }
-    int draw_x = 1 + note.x;
-    if (draw_x > snapshot.width - 1) {
-      draw_x = snapshot.width - 1;
-    }
+    const int max_note_x = std::max(0, snapshot.width - ItemVisualWidth(note.type));
+    const int clamped_note_x = std::clamp(note.x, 0, max_note_x);
+    const int draw_x = 1 + clamped_note_x;
     canvas.DrawText(draw_x, 1 + y, symbol, color);
   }
 
   int catcher_y = 1 + snapshot.height - 3;
-  int catcher_x = 1 + snapshot.player_x;
-  int start_x = catcher_x - 2;
-  if (start_x < 1) {
-    start_x = 1;
-  }
-  if (start_x > snapshot.width - 4) {
-    start_x = snapshot.width - 4;
-  }
+  int start_x = 1 + CatcherStartColumn(snapshot.player_x, snapshot.width);
   const bool catcher_flash = snapshot.catcher_flash_frames > 0;
   const Color catcher_color = catcher_flash ? Color::YellowLight : Color::CyanLight;
   // Draw catcher as a single token to avoid terminal-specific per-cell artifacts.

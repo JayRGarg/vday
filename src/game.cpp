@@ -5,8 +5,6 @@
 
 namespace vday {
 
-namespace {
-
 int CatcherStartColumn(int player_x, int width) {
   int start = player_x - 2;  // center-aligned |___| in board coordinates
   if (start < 0) {
@@ -18,12 +16,11 @@ int CatcherStartColumn(int player_x, int width) {
   return start;
 }
 
-int VisualWidth(ItemType type) {
-  // Most emoji render as two terminal cells; heart is a single cell.
-  return type == ItemType::Heart ? 1 : 2;
+int ItemVisualWidth(ItemType type) {
+  (void)type;
+  // All current note symbols are emoji and render as two terminal cells.
+  return 2;
 }
-
-}  // namespace
 
 GameEngine::GameEngine() {
   std::random_device rd;
@@ -193,7 +190,6 @@ void GameEngine::StepSimulation(float dt) {
 }
 
 void GameEngine::SpawnNote() {
-  std::uniform_int_distribution<int> x_dist(0, snapshot_.width - 1);
   std::uniform_int_distribution<int> type_dist(0, 99);
 
   int roll = type_dist(rng_);
@@ -208,6 +204,8 @@ void GameEngine::SpawnNote() {
     type = ItemType::BrokenHeart;
   }
 
+  const int max_x = std::max(0, snapshot_.width - ItemVisualWidth(type));
+  std::uniform_int_distribution<int> x_dist(0, max_x);
   snapshot_.notes.push_back(Note{x_dist(rng_), 0.0f, type});
 }
 
@@ -223,7 +221,7 @@ int GameEngine::CatchOrMiss(Note& note) {
   const int catcher_inner_right = catcher_start + 3;
 
   const int note_left = note.x;
-  const int note_right = note.x + VisualWidth(note.type) - 1;
+  const int note_right = note.x + ItemVisualWidth(note.type) - 1;
   const bool overlaps_catcher =
       note_left <= catcher_inner_right && note_right >= catcher_inner_left;
 

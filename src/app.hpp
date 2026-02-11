@@ -30,6 +30,7 @@ class App {
     StartGame,
     Letter,
     Menu,
+    ResetProgress,
     Settings,
     Quit,
   };
@@ -42,6 +43,8 @@ class App {
 
   bool IsGameCompleted() const;
   void RefreshDashboardItems();
+  void ApplyProgressToLetterState();
+  void ResetProgress();
   void LoadLetter();
   void UpdateLetterReveal();
   void OnUnlock(int count);
@@ -58,6 +61,7 @@ class App {
   std::vector<std::string> dashboard_items_;
   std::vector<DashboardAction> dashboard_actions_;
   int dashboard_selected_ = 0;
+  bool reset_confirm_pending_ = false;
 
   std::vector<LetterChunk> letter_chunks_;
   int last_unlocked_ = 0;

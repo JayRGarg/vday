@@ -176,6 +176,11 @@ void App::Run() {
   auto dashboard_menu = Menu(&dashboard_items_, &dashboard_selected_);
   auto dashboard = Renderer(dashboard_menu, [&] {
     RefreshDashboardItems();
+    if (reset_confirm_pending_ &&
+        (dashboard_selected_ < 0 || dashboard_selected_ >= static_cast<int>(dashboard_actions_.size()) ||
+         dashboard_actions_[dashboard_selected_] != DashboardAction::ResetProgress)) {
+      reset_confirm_pending_ = false;
+    }
     auto content = vbox({
         text("Valentine's Day Terminal") | bold | center,
         separator(),
@@ -183,6 +188,8 @@ void App::Run() {
         separator(),
         text("Progress: " + std::to_string(progress_.unlocked_chunks) + " chunks") | center,
         text("Best Score: " + std::to_string(progress_.best_score)) | center,
+        reset_confirm_pending_ ? text("Press Enter on Reset again to confirm") | center | bold
+                               : text(""),
     });
     return content | border;
   });
@@ -197,15 +204,27 @@ void App::Run() {
 
       const DashboardAction action = dashboard_actions_[dashboard_selected_];
       if (action == DashboardAction::StartGame) {
+        reset_confirm_pending_ = false;
         set_screen(Screen::Game);
         game_.PushInput(InputAction::Reset);
       } else if (action == DashboardAction::Letter) {
+        reset_confirm_pending_ = false;
         set_screen(Screen::Letter);
       } else if (action == DashboardAction::Menu) {
+        reset_confirm_pending_ = false;
         set_screen(Screen::Menu);
+      } else if (action == DashboardAction::ResetProgress) {
+        if (reset_confirm_pending_) {
+          ResetProgress();
+          reset_confirm_pending_ = false;
+        } else {
+          reset_confirm_pending_ = true;
+        }
       } else if (action == DashboardAction::Settings) {
+        reset_confirm_pending_ = false;
         set_screen(Screen::Settings);
       } else if (action == DashboardAction::Quit) {
+        reset_confirm_pending_ = false;
         set_screen(Screen::Quit);
         running_ = false;
         screen.Exit();
@@ -214,6 +233,31 @@ void App::Run() {
     }
     return false;
   });
+
+  auto render_letter_progress = [&](bool show_escape_hint) {
+    UpdateLetterReveal();
+    Elements blocks;
+    for (size_t i = 0; i < letter_chunks_.size(); ++i) {
+      const auto& chunk = letter_chunks_[i];
+      if (static_cast<int>(i) < progress_.unlocked_chunks) {
+        std::string visible = chunk.text.substr(0, std::min(chunk.revealed, chunk.text.size()));
+        blocks.push_back(paragraph(visible));
+      } else {
+        blocks.push_back(paragraph("[Locked - play the game to reveal more]") | dim);
+      }
+    }
+
+    Elements content = {
+        text("Letter Reveal") | bold | center,
+        separator(),
+        vbox(std::move(blocks)) | frame | flex,
+    };
+    if (show_escape_hint) {
+      content.push_back(separator());
+      content.push_back(text("Esc to return") | center);
+    }
+    return vbox(std::move(content)) | border;
+  };
 
   auto game_view = Renderer([&] {
     DrainGameEvents();
@@ -230,15 +274,20 @@ void App::Run() {
     });
 
     auto instructions = text("Arrows/A-D move  P pause  R reset  Esc back");
-    return vbox({
-               text("Falling Love Notes") | bold | center,
-               separator(),
-               RenderGameCanvas(snapshot) | center,
-               separator(),
-               stats | center,
-               instructions | center,
-           }) |
-           border;
+    auto game_panel = vbox({
+                          text("Falling Love Notes") | bold | center,
+                          separator(),
+                          RenderGameCanvas(snapshot) | center,
+                          separator(),
+                          stats | center,
+                          instructions | center,
+                      }) |
+                      border;
+    auto letter_panel = render_letter_progress(false);
+    return hbox({
+        game_panel | flex,
+        letter_panel | flex,
+    });
   });
 
   game_view = CatchEvent(game_view, [&](Event event) {
@@ -265,28 +314,7 @@ void App::Run() {
     return false;
   });
 
-  auto letter_view = Renderer([&] {
-    UpdateLetterReveal();
-    Elements blocks;
-    for (size_t i = 0; i < letter_chunks_.size(); ++i) {
-      const auto& chunk = letter_chunks_[i];
-      if (static_cast<int>(i) < progress_.unlocked_chunks) {
-        std::string visible = chunk.text.substr(0, std::min(chunk.revealed, chunk.text.size()));
-        blocks.push_back(paragraph(visible));
-      } else {
-        blocks.push_back(paragraph("[Locked - play the game to reveal more]") | dim);
-      }
-    }
-
-    auto content = vbox({
-        text("Letter Reveal") | bold | center,
-        separator(),
-        vbox(std::move(blocks)) | frame | flex,
-        separator(),
-        text("Esc to return") | center,
-    });
-    return content | border;
-  });
+  auto letter_view = Renderer([&] { return render_letter_progress(true); });
 
   letter_view = CatchEvent(letter_view, [&](Event event) {
     if (event == Event::Escape) {
@@ -434,6 +462,8 @@ void App::RefreshDashboardItems() {
     dashboard_actions_.push_back(DashboardAction::Menu);
   }
 
+  dashboard_items_.push_back("Reset");
+  dashboard_actions_.push_back(DashboardAction::ResetProgress);
   dashboard_items_.push_back("Settings");
   dashboard_actions_.push_back(DashboardAction::Settings);
   dashboard_items_.push_back("Quit");
@@ -442,6 +472,32 @@ void App::RefreshDashboardItems() {
   if (dashboard_selected_ >= static_cast<int>(dashboard_items_.size())) {
     dashboard_selected_ = std::max(0, static_cast<int>(dashboard_items_.size()) - 1);
   }
+}
+
+void App::ApplyProgressToLetterState() {
+  const int unlocked = std::clamp(progress_.unlocked_chunks, 0, static_cast<int>(letter_chunks_.size()));
+  progress_.unlocked_chunks = unlocked;
+  for (size_t i = 0; i < letter_chunks_.size(); ++i) {
+    auto& chunk = letter_chunks_[i];
+    if (static_cast<int>(i) < unlocked) {
+      chunk.unlocked = true;
+      chunk.revealed = std::min(chunk.revealed, chunk.text.size());
+    } else {
+      chunk.unlocked = false;
+      chunk.revealed = 0;
+    }
+  }
+}
+
+void App::ResetProgress() {
+  const bool keep_audio_enabled = progress_.settings.audio_enabled;
+  progress_ = ProgressData{};
+  progress_.settings.audio_enabled = keep_audio_enabled;
+  last_unlocked_ = 0;
+  ApplyProgressToLetterState();
+  last_reveal_tick_ = std::chrono::steady_clock::now();
+  persistence_.Save(progress_);
+  RefreshDashboardItems();
 }
 
 void App::LoadLetter() {
@@ -461,7 +517,7 @@ void App::LoadLetter() {
   for (const auto& chunk : chunks) {
     letter_chunks_.push_back(LetterChunk{chunk, 0u, false});
   }
-  progress_.unlocked_chunks = std::min<int>(progress_.unlocked_chunks, static_cast<int>(letter_chunks_.size()));
+  ApplyProgressToLetterState();
   last_unlocked_ = progress_.unlocked_chunks;
   last_reveal_tick_ = std::chrono::steady_clock::now();
   UpdateLetterReveal();

@@ -5,15 +5,36 @@
 
 namespace vday {
 
+namespace {
+
+constexpr int kCatcherWidth = 5;
+constexpr int kCatcherWallMargin = 1;
+
+int MinCatcherStart(int width) {
+  (void)width;
+  return kCatcherWallMargin;
+}
+
+int MaxCatcherStart(int width) {
+  int max_start = width - kCatcherWidth - kCatcherWallMargin;
+  if (max_start < MinCatcherStart(width)) {
+    max_start = MinCatcherStart(width);
+  }
+  return max_start;
+}
+
+int MinPlayerX(int width) {
+  return MinCatcherStart(width) + 2;
+}
+
+int MaxPlayerX(int width) {
+  return MaxCatcherStart(width) + 2;
+}
+
+}  // namespace
+
 int CatcherStartColumn(int player_x, int width) {
-  int start = player_x - 2;  // center-aligned |___| in board coordinates
-  if (start < 0) {
-    start = 0;
-  }
-  if (start > width - 5) {
-    start = width - 5;
-  }
-  return start;
+  return std::clamp(player_x - 2, MinCatcherStart(width), MaxCatcherStart(width));
 }
 
 int ItemVisualWidth(ItemType type) {
@@ -27,7 +48,8 @@ GameEngine::GameEngine() {
   rng_ = std::mt19937(rd());
   snapshot_.width = 40;
   snapshot_.height = 20;
-  snapshot_.player_x = snapshot_.width / 2;
+  snapshot_.player_x =
+      std::clamp(snapshot_.width / 2, MinPlayerX(snapshot_.width), MaxPlayerX(snapshot_.width));
 }
 
 GameEngine::~GameEngine() {
@@ -61,7 +83,8 @@ void GameEngine::Reset() {
   snapshot_.paused = false;
   snapshot_.unlocked_chunks = 0;
   snapshot_.catcher_flash_frames = 0;
-  snapshot_.player_x = snapshot_.width / 2;
+  snapshot_.player_x =
+      std::clamp(snapshot_.width / 2, MinPlayerX(snapshot_.width), MaxPlayerX(snapshot_.width));
   spawn_timer_ = 0.0f;
   input_queue_.Clear();
   event_queue_.Clear();
@@ -115,10 +138,12 @@ void GameEngine::RunLoop() {
 void GameEngine::HandleInput(InputAction action) {
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
   const int step = 2;
+  const int min_player_x = MinPlayerX(snapshot_.width);
+  const int max_player_x = MaxPlayerX(snapshot_.width);
   if (action == InputAction::MoveLeft) {
-    snapshot_.player_x = std::max(0, snapshot_.player_x - step);
+    snapshot_.player_x = std::max(min_player_x, snapshot_.player_x - step);
   } else if (action == InputAction::MoveRight) {
-    snapshot_.player_x = std::min(snapshot_.width - 1, snapshot_.player_x + step);
+    snapshot_.player_x = std::min(max_player_x, snapshot_.player_x + step);
   } else if (action == InputAction::TogglePause) {
     snapshot_.paused = !snapshot_.paused;
   } else if (action == InputAction::Reset) {
@@ -129,7 +154,8 @@ void GameEngine::HandleInput(InputAction action) {
     snapshot_.paused = false;
     snapshot_.unlocked_chunks = 0;
     snapshot_.catcher_flash_frames = 0;
-    snapshot_.player_x = snapshot_.width / 2;
+    snapshot_.player_x =
+        std::clamp(snapshot_.width / 2, MinPlayerX(snapshot_.width), MaxPlayerX(snapshot_.width));
     spawn_timer_ = 0.0f;
   }
 }

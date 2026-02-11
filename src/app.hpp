@@ -26,12 +26,22 @@ class App {
     Quit,
   };
 
+  enum class DashboardAction {
+    StartGame,
+    Letter,
+    Menu,
+    Settings,
+    Quit,
+  };
+
   struct LetterChunk {
     std::string text;
     size_t revealed = 0;
     bool unlocked = false;
   };
 
+  bool IsGameCompleted() const;
+  void RefreshDashboardItems();
   void LoadLetter();
   void UpdateLetterReveal();
   void OnUnlock(int count);
@@ -46,6 +56,7 @@ class App {
 
   Screen screen_ = Screen::Dashboard;
   std::vector<std::string> dashboard_items_;
+  std::vector<DashboardAction> dashboard_actions_;
   int dashboard_selected_ = 0;
 
   std::vector<LetterChunk> letter_chunks_;

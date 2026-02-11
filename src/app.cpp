@@ -61,16 +61,22 @@ std::string Repeat(const std::string& value, int count) {
 
 ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
   using namespace ftxui;
-  Canvas canvas(snapshot.width + 2, snapshot.height + 2);
+  constexpr int kCanvasCellWidth = 2;
+  constexpr int kCanvasCellHeight = 4;
+  auto cx = [&](int cell_x) { return cell_x * kCanvasCellWidth; };
+  auto cy = [&](int cell_y) { return cell_y * kCanvasCellHeight; };
+
+  Canvas canvas((snapshot.width + 2) * kCanvasCellWidth,
+                (snapshot.height + 2) * kCanvasCellHeight);
 
   const std::string top = "\xE2\x94\x8C" + Repeat("\xE2\x94\x80", snapshot.width) + "\xE2\x94\x90";  // ┌ ─ ┐
   const std::string bottom = "\xE2\x94\x94" + Repeat("\xE2\x94\x80", snapshot.width) + "\xE2\x94\x98";  // └ ─ ┘
-  canvas.DrawText(0, 0, top);
+  canvas.DrawText(cx(0), cy(0), top);
   for (int y = 1; y <= snapshot.height; ++y) {
-    canvas.DrawText(0, y, "\xE2\x94\x82");  // │
-    canvas.DrawText(snapshot.width + 1, y, "\xE2\x94\x82");  // │
+    canvas.DrawText(cx(0), cy(y), "\xE2\x94\x82");  // │
+    canvas.DrawText(cx(snapshot.width + 1), cy(y), "\xE2\x94\x82");  // │
   }
-  canvas.DrawText(0, snapshot.height + 1, bottom);
+  canvas.DrawText(cx(0), cy(snapshot.height + 1), bottom);
 
   for (const auto& note : snapshot.notes) {
     int y = static_cast<int>(note.y);
@@ -100,7 +106,7 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
     const int max_note_x = std::max(0, snapshot.width - ItemVisualWidth(note.type));
     const int clamped_note_x = std::clamp(note.x, 0, max_note_x);
     const int draw_x = 1 + clamped_note_x;
-    canvas.DrawText(draw_x, 1 + y, symbol, color);
+    canvas.DrawText(cx(draw_x), cy(1 + y), symbol, color);
   }
 
   int catcher_y = 1 + snapshot.height - 3;
@@ -108,10 +114,10 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
   const bool catcher_flash = snapshot.catcher_flash_frames > 0;
   const Color catcher_color = catcher_flash ? Color::YellowLight : Color::CyanLight;
   // Draw catcher as a single token to avoid terminal-specific per-cell artifacts.
-  canvas.DrawText(start_x, catcher_y, "|___|", catcher_color);
+  canvas.DrawText(cx(start_x), cy(catcher_y), "|___|", catcher_color);
   if (catcher_flash && catcher_y > 1) {
     const std::string sparkle = (snapshot.catcher_flash_frames % 2 == 0) ? " * " : " + ";
-    canvas.DrawText(start_x + 1, catcher_y - 1, sparkle, Color::White);
+    canvas.DrawText(cx(start_x + 1), cy(catcher_y - 1), sparkle, Color::White);
   }
   return ftxui::canvas(std::move(canvas));
 }
@@ -119,7 +125,6 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
 }  // namespace
 
 App::App() {
-  dashboard_items_ = {"Start Game", "Letter", "Dinner Menu", "Settings", "Quit"};
   menu_items_ = {"Rose Petal Salad", "Crimson Risotto", "Heartfire Steak", "Velvet Tiramisu"};
   menu_descriptions_ = {
       "Arugula, strawberries, feta, toasted almonds, balsamic glaze.",
@@ -133,6 +138,7 @@ App::App() {
   last_unlocked_ = progress_.unlocked_chunks;
 
   LoadLetter();
+  RefreshDashboardItems();
 }
 
 void App::Run() {
@@ -169,6 +175,7 @@ void App::Run() {
 
   auto dashboard_menu = Menu(&dashboard_items_, &dashboard_selected_);
   auto dashboard = Renderer(dashboard_menu, [&] {
+    RefreshDashboardItems();
     auto content = vbox({
         text("Valentine's Day Terminal") | bold | center,
         separator(),
@@ -182,25 +189,26 @@ void App::Run() {
 
   dashboard = CatchEvent(dashboard, [&](Event event) {
     if (event == Event::Return) {
-      switch (dashboard_selected_) {
-        case 0:
-          set_screen(Screen::Game);
-          game_.PushInput(InputAction::Reset);
-          break;
-        case 1:
-          set_screen(Screen::Letter);
-          break;
-        case 2:
-          set_screen(Screen::Menu);
-          break;
-        case 3:
-          set_screen(Screen::Settings);
-          break;
-        case 4:
-          set_screen(Screen::Quit);
-          running_ = false;
-          screen.Exit();
-          break;
+      RefreshDashboardItems();
+      if (dashboard_actions_.empty() || dashboard_selected_ < 0 ||
+          dashboard_selected_ >= static_cast<int>(dashboard_actions_.size())) {
+        return true;
+      }
+
+      const DashboardAction action = dashboard_actions_[dashboard_selected_];
+      if (action == DashboardAction::StartGame) {
+        set_screen(Screen::Game);
+        game_.PushInput(InputAction::Reset);
+      } else if (action == DashboardAction::Letter) {
+        set_screen(Screen::Letter);
+      } else if (action == DashboardAction::Menu) {
+        set_screen(Screen::Menu);
+      } else if (action == DashboardAction::Settings) {
+        set_screen(Screen::Settings);
+      } else if (action == DashboardAction::Quit) {
+        set_screen(Screen::Quit);
+        running_ = false;
+        screen.Exit();
       }
       return true;
     }
@@ -403,6 +411,37 @@ void App::Run() {
   game_.Stop();
   audio_.Stop();
   persistence_.Save(progress_);
+}
+
+bool App::IsGameCompleted() const {
+  if (letter_chunks_.empty()) {
+    return false;
+  }
+  return progress_.unlocked_chunks >= static_cast<int>(letter_chunks_.size());
+}
+
+void App::RefreshDashboardItems() {
+  dashboard_items_.clear();
+  dashboard_actions_.clear();
+
+  dashboard_items_.push_back("Start Game");
+  dashboard_actions_.push_back(DashboardAction::StartGame);
+
+  if (IsGameCompleted()) {
+    dashboard_items_.push_back("Letter");
+    dashboard_actions_.push_back(DashboardAction::Letter);
+    dashboard_items_.push_back("Dinner Menu");
+    dashboard_actions_.push_back(DashboardAction::Menu);
+  }
+
+  dashboard_items_.push_back("Settings");
+  dashboard_actions_.push_back(DashboardAction::Settings);
+  dashboard_items_.push_back("Quit");
+  dashboard_actions_.push_back(DashboardAction::Quit);
+
+  if (dashboard_selected_ >= static_cast<int>(dashboard_items_.size())) {
+    dashboard_selected_ = std::max(0, static_cast<int>(dashboard_items_.size()) - 1);
+  }
 }
 
 void App::LoadLetter() {

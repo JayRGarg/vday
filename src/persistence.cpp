@@ -6,22 +6,59 @@
 
 namespace vday {
 
+namespace {
+
+std::filesystem::path LegacySavePath() {
+  const char* home = std::getenv("HOME");
+  std::filesystem::path base = home ? home : ".";
+  return base / ".valentine_tui" / "progress.json";
+}
+
+std::filesystem::path PreferredSavePath() {
+  const char* xdg_state_home = std::getenv("XDG_STATE_HOME");
+  if (xdg_state_home && xdg_state_home[0] != '\0') {
+    return std::filesystem::path(xdg_state_home) / "valentine_tui" / "progress.json";
+  }
+
+  const char* home = std::getenv("HOME");
+  std::filesystem::path base = home ? home : ".";
+  return base / ".local" / "state" / "valentine_tui" / "progress.json";
+}
+
+bool ReadWholeFile(const std::filesystem::path& path, std::string& out) {
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    return false;
+  }
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  out = buffer.str();
+  return true;
+}
+
+}  // namespace
+
 Persistence::Persistence() = default;
 
 ProgressData Persistence::Load() {
   ProgressData data;
-  std::filesystem::path path = SavePath();
-  std::ifstream file(path);
-  if (!file.is_open()) {
-    return data;
+  std::string content;
+  const std::filesystem::path path = SavePath();
+  if (!ReadWholeFile(path, content)) {
+    const std::filesystem::path legacy_path = LegacySavePath();
+    if (!ReadWholeFile(legacy_path, content)) {
+      return data;
+    }
   }
-  std::stringstream buffer;
-  buffer << file.rdbuf();
-  std::string content = buffer.str();
 
   data.unlocked_chunks = ParseInt(content, "unlocked_chunks", data.unlocked_chunks);
   data.best_score = ParseInt(content, "best_score", data.best_score);
   data.settings.audio_enabled = ParseBool(content, "audio_enabled", data.settings.audio_enabled);
+
+  if (!std::filesystem::exists(path)) {
+    Save(data);
+  }
+
   return data;
 }
 
@@ -43,9 +80,7 @@ void Persistence::Save(const ProgressData& data) {
 }
 
 std::filesystem::path Persistence::SavePath() const {
-  const char* home = std::getenv("HOME");
-  std::filesystem::path base = home ? home : ".";
-  return base / ".valentine_tui" / "progress.json";
+  return PreferredSavePath();
 }
 
 int Persistence::ParseInt(const std::string& content, const std::string& key, int fallback) {

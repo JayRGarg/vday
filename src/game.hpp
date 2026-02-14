@@ -55,8 +55,8 @@ struct GameEvent {
 
 enum class AudioCommandType {
   PlayCatch,
-  PlayMiss,
-  PlayUnlock,
+  PlayBrokenHeart,
+  PlayMissionComplete,
   SetEnabled,
   Stop,
 };

@@ -184,11 +184,14 @@ void GameEngine::StepSimulation(float dt) {
   }
 
   int caught = 0;
+  int broken_heart_caught = 0;
   int missed = 0;
   for (auto& note : snapshot_.notes) {
     int result = CatchOrMiss(note);
-    if (result > 0) {
+    if (result == 1) {
       caught++;
+    } else if (result == 2) {
+      broken_heart_caught++;
     } else if (result == 0) {
       missed++;
     }
@@ -203,19 +206,21 @@ void GameEngine::StepSimulation(float dt) {
   if (missed > 0) {
     snapshot_.misses += missed;
     snapshot_.streak = 0;
-    audio_queue_.Push(AudioCommand{AudioCommandType::PlayMiss, false});
   }
 
   if (caught > 0) {
     snapshot_.catcher_flash_frames = 10;
     audio_queue_.Push(AudioCommand{AudioCommandType::PlayCatch, false});
   }
+  if (broken_heart_caught > 0) {
+    snapshot_.catcher_flash_frames = 10;
+    audio_queue_.Push(AudioCommand{AudioCommandType::PlayBrokenHeart, false});
+  }
 
   int new_unlocked = snapshot_.score / unlock_score_step_;
   if (new_unlocked > snapshot_.unlocked_chunks) {
     snapshot_.unlocked_chunks = new_unlocked;
     event_queue_.Push(GameEvent{GameEventType::UnlockChunk, new_unlocked});
-    audio_queue_.Push(AudioCommand{AudioCommandType::PlayUnlock, false});
   }
 }
 
@@ -260,10 +265,11 @@ int GameEngine::CatchOrMiss(Note& note) {
     snapshot_.score += delta;
     if (note.type == ItemType::BrokenHeart) {
       snapshot_.streak = 0;
+      return 2;
     } else {
       snapshot_.streak += 1;
+      return 1;
     }
-    return 1;
   }
   return 0;
 }

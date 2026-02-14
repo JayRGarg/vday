@@ -98,12 +98,12 @@ ftxui::Color RandomValentineColor(std::mt19937& rng) {
 
   // Weighted palette by repeating families: reds/pinks dominate, whites/blues/purples accent.
   static constexpr std::array<ChannelRange, 10> kRanges = {
-      ChannelRange{170, 255, 20, 90, 40, 110},    // vivid red
-      ChannelRange{150, 235, 30, 105, 60, 130},   // rose red
-      ChannelRange{220, 255, 120, 210, 160, 235}, // bright pink
-      ChannelRange{200, 255, 95, 180, 145, 220},  // soft pink
-      ChannelRange{235, 255, 235, 255, 240, 255}, // white blush
-      ChannelRange{225, 250, 220, 245, 235, 255}, // warm white
+      ChannelRange{200, 255, 45, 115, 70, 150},   // vivid red (brighter)
+      ChannelRange{185, 245, 60, 130, 95, 170},   // rose red (brighter)
+      ChannelRange{230, 255, 145, 220, 190, 245}, // bright pink (brighter)
+      ChannelRange{218, 255, 125, 205, 170, 235}, // soft pink (brighter)
+      ChannelRange{242, 255, 210, 242, 232, 255}, // blush tint (no neutral white)
+      ChannelRange{236, 255, 196, 232, 226, 255}, // cool blush tint
       ChannelRange{95, 170, 145, 220, 210, 255},  // sky blue
       ChannelRange{120, 195, 170, 235, 220, 255}, // powder blue
       ChannelRange{145, 220, 90, 170, 190, 255},  // violet
@@ -111,11 +111,47 @@ ftxui::Color RandomValentineColor(std::mt19937& rng) {
   };
 
   std::uniform_int_distribution<size_t> family_dist(0, kRanges.size() - 1);
-  const ChannelRange& c = kRanges[family_dist(rng)];
-  std::uniform_int_distribution<int> r_dist(c.r_min, c.r_max);
-  std::uniform_int_distribution<int> g_dist(c.g_min, c.g_max);
-  std::uniform_int_distribution<int> b_dist(c.b_min, c.b_max);
-  return ftxui::Color::RGB(r_dist(rng), g_dist(rng), b_dist(rng));
+  auto looks_brown_or_dull = [](int r, int g, int b) {
+    // Brown-like colors are typically warm, low-blue, and mid-luminance.
+    const int lum = (2126 * r + 7152 * g + 722 * b) / 10000;
+    const bool warm_order = r > g && g > b;
+    const bool low_blue = b < 120;
+    const bool mid_green = g >= 55 && g <= 185;
+    const bool mid_lum = lum >= 45 && lum <= 190;
+    const bool not_vivid_red = (r - g) <= 120;
+    const bool brownish = warm_order && low_blue && mid_green && mid_lum && not_vivid_red;
+
+    // Reject dark/bland warm tones (especially reds/pinks).
+    const int max_c = std::max({r, g, b});
+    const int min_c = std::min({r, g, b});
+    const int chroma = max_c - min_c;
+    const bool warm_family = r >= g && r >= b;
+    const bool dark_or_bland_warm = warm_family && (lum < 118 || chroma < 60);
+
+    // Remove near-neutral/gray colors in every family.
+    const int rg = std::abs(r - g);
+    const int rb = std::abs(r - b);
+    const int gb = std::abs(g - b);
+    const bool near_neutral = (rg < 26 && rb < 26 && gb < 26);
+    const bool low_chroma_any = chroma < 48;
+    return brownish || dark_or_bland_warm || near_neutral || low_chroma_any;
+  };
+
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    const ChannelRange& c = kRanges[family_dist(rng)];
+    std::uniform_int_distribution<int> r_dist(c.r_min, c.r_max);
+    std::uniform_int_distribution<int> g_dist(c.g_min, c.g_max);
+    std::uniform_int_distribution<int> b_dist(c.b_min, c.b_max);
+    const int r = r_dist(rng);
+    const int g = g_dist(rng);
+    const int b = b_dist(rng);
+    if (!looks_brown_or_dull(r, g, b)) {
+      return ftxui::Color::RGB(r, g, b);
+    }
+  }
+
+  // Safety fallback: saturated pink (never brown).
+  return ftxui::Color::RGB(245, 130, 205);
 }
 
 bool TryFindPhotoPath(std::filesystem::path& out) {
@@ -596,6 +632,9 @@ void App::Run() {
     DrainAudioCommands();
     auto snapshot = game_.Snapshot();
     progress_.best_score = std::max(progress_.best_score, snapshot.score);
+    const int total_chunks = static_cast<int>(letter_chunks_.size());
+    const bool mission_complete =
+        total_chunks > 0 && progress_.unlocked_chunks >= total_chunks;
 
     auto stats = hbox({
         text("Score: " + std::to_string(snapshot.score)) | color(hacker_white),
@@ -613,6 +652,10 @@ void App::Run() {
                           separator(),
                           stats | center,
                           instructions | center,
+                          mission_complete ? text("[MISSION COMPLETE]") | bold | center | color(Color::GreenLight)
+                                           : text(""),
+                          mission_complete ? text("Press M to open menu") | center | color(hacker_white)
+                                           : text(""),
                       }) |
                       borderDouble | color(neon_frame()) |
                       size(ftxui::WIDTH, ftxui::EQUAL, 46);
@@ -642,6 +685,18 @@ void App::Run() {
     }
     if (event == Event::Character('r') || event == Event::Character('R')) {
       game_.PushInput(InputAction::Reset);
+      return true;
+    }
+    if (event == Event::Character('m') || event == Event::Character('M')) {
+      DrainGameEvents();
+      const int total_chunks = static_cast<int>(letter_chunks_.size());
+      const auto snapshot = game_.Snapshot();
+      const int unlocked_now = std::max(progress_.unlocked_chunks, snapshot.unlocked_chunks);
+      const bool mission_complete =
+          total_chunks > 0 && unlocked_now >= total_chunks;
+      if (mission_complete) {
+        set_screen(Screen::Menu);
+      }
       return true;
     }
     if (event == Event::Escape) {
@@ -1345,7 +1400,16 @@ void App::DrainGameEvents() {
   GameEvent event;
   while (game_.TryPopEvent(event)) {
     if (event.type == GameEventType::UnlockChunk) {
+      const bool was_complete =
+          !letter_chunks_.empty() &&
+          progress_.unlocked_chunks >= static_cast<int>(letter_chunks_.size());
       OnUnlock(event.value);
+      const bool is_complete =
+          !letter_chunks_.empty() &&
+          progress_.unlocked_chunks >= static_cast<int>(letter_chunks_.size());
+      if (!was_complete && is_complete) {
+        audio_.PushCommand(AudioCommand{AudioCommandType::PlayMissionComplete, false});
+      }
     }
   }
 }

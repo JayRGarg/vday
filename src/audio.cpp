@@ -52,21 +52,21 @@ void AudioEngine::RunLoop() {
 
   std::filesystem::path base = std::filesystem::current_path() / "assets" / "audio";
   std::filesystem::path catch_path = base / "catch.wav";
-  std::filesystem::path miss_path = base / "miss.wav";
-  std::filesystem::path unlock_path = base / "unlock.wav";
+  std::filesystem::path broken_heart_path = base / "broken_heart.wav";
+  std::filesystem::path mission_complete_path = base / "mission_complete.wav";
 
   Mix_Chunk* catch_sfx = nullptr;
-  Mix_Chunk* miss_sfx = nullptr;
-  Mix_Chunk* unlock_sfx = nullptr;
+  Mix_Chunk* broken_heart_sfx = nullptr;
+  Mix_Chunk* mission_complete_sfx = nullptr;
 
   if (std::filesystem::exists(catch_path)) {
     catch_sfx = Mix_LoadWAV(catch_path.string().c_str());
   }
-  if (std::filesystem::exists(miss_path)) {
-    miss_sfx = Mix_LoadWAV(miss_path.string().c_str());
+  if (std::filesystem::exists(broken_heart_path)) {
+    broken_heart_sfx = Mix_LoadWAV(broken_heart_path.string().c_str());
   }
-  if (std::filesystem::exists(unlock_path)) {
-    unlock_sfx = Mix_LoadWAV(unlock_path.string().c_str());
+  if (std::filesystem::exists(mission_complete_path)) {
+    mission_complete_sfx = Mix_LoadWAV(mission_complete_path.string().c_str());
   }
 #endif
 
@@ -87,10 +87,10 @@ void AudioEngine::RunLoop() {
     }
     if (command.type == AudioCommandType::PlayCatch && catch_sfx) {
       Mix_PlayChannel(-1, catch_sfx, 0);
-    } else if (command.type == AudioCommandType::PlayMiss && miss_sfx) {
-      Mix_PlayChannel(-1, miss_sfx, 0);
-    } else if (command.type == AudioCommandType::PlayUnlock && unlock_sfx) {
-      Mix_PlayChannel(-1, unlock_sfx, 0);
+    } else if (command.type == AudioCommandType::PlayBrokenHeart && broken_heart_sfx) {
+      Mix_PlayChannel(-1, broken_heart_sfx, 0);
+    } else if (command.type == AudioCommandType::PlayMissionComplete && mission_complete_sfx) {
+      Mix_PlayChannel(-1, mission_complete_sfx, 0);
     }
 #else
     (void)enabled;
@@ -101,11 +101,11 @@ void AudioEngine::RunLoop() {
   if (catch_sfx) {
     Mix_FreeChunk(catch_sfx);
   }
-  if (miss_sfx) {
-    Mix_FreeChunk(miss_sfx);
+  if (broken_heart_sfx) {
+    Mix_FreeChunk(broken_heart_sfx);
   }
-  if (unlock_sfx) {
-    Mix_FreeChunk(unlock_sfx);
+  if (mission_complete_sfx) {
+    Mix_FreeChunk(mission_complete_sfx);
   }
   Mix_CloseAudio();
   SDL_QuitSubSystem(SDL_INIT_AUDIO);

@@ -413,7 +413,7 @@ void App::Run() {
     };
 
     Elements content = {
-        text("[ DECRYPTING LETTER STREAM ]") | bold | center | color(hacker_purple),
+        text("[ DECODING LETTER STREAM ]") | bold | center | color(hacker_purple),
         separator(),
         build_colored_letter(reveal_all) | frame | flex,
     };
@@ -428,33 +428,149 @@ void App::Run() {
     UpdateAsciiReveal(score, reveal_all);
     RefreshAsciiScrambleState(reveal_all);
 
+    static const std::vector<std::string> kPixelScrambleGlyphs = {
+        "\xE2\x96\x88",  // █
+        "\xE2\x96\x93",  // ▓
+        "\xE2\x96\x92",  // ▒
+        "\xE2\x96\x91",  // ░
+        "\xE2\x96\x80",  // ▀
+        "\xE2\x96\x84",  // ▄
+    };
+    auto hash_u32 = [](uint64_t x) -> uint32_t {
+      x ^= x >> 33;
+      x *= 0xff51afd7ed558ccdULL;
+      x ^= x >> 33;
+      x *= 0xc4ceb9fe1a85ec53ULL;
+      x ^= x >> 33;
+      return static_cast<uint32_t>(x & 0xffffffffULL);
+    };
+    auto blend_rgb = [](const std::array<uint8_t, 3>& a, const std::array<uint8_t, 3>& b,
+                        float t) -> std::array<uint8_t, 3> {
+      const float clamped_t = std::clamp(t, 0.0f, 1.0f);
+      std::array<uint8_t, 3> out{};
+      for (int i = 0; i < 3; ++i) {
+        const float v = static_cast<float>(a[static_cast<size_t>(i)]) * (1.0f - clamped_t) +
+                        static_cast<float>(b[static_cast<size_t>(i)]) * clamped_t;
+        out[static_cast<size_t>(i)] = static_cast<uint8_t>(std::clamp(static_cast<int>(std::round(v)), 0, 255));
+      }
+      return out;
+    };
+
+    bool all_photo_revealed = true;
+    if (!reveal_all) {
+      for (size_t i = 0; i < ascii_revealed_.size(); ++i) {
+        if (!ascii_revealed_[i]) {
+          all_photo_revealed = false;
+          break;
+        }
+      }
+    }
+    const bool animate_matte = !reveal_all && !all_photo_revealed;
+
+    constexpr int kMattePaddingX = 24;
+    constexpr int kMattePaddingY = 6;
+    const int matte_w = ascii_art_width_ + kMattePaddingX * 2;
+    const int matte_h = ascii_art_height_ + kMattePaddingY * 2;
+    const auto tick = animate_matte
+                          ? static_cast<uint64_t>(
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count() /
+                                std::max(1, ascii_scramble_interval_ms_))
+                          : static_cast<uint64_t>(0);
+
     Elements lines;
-    for (int y = 0; y < ascii_art_height_; ++y) {
+    lines.reserve(static_cast<size_t>(matte_h));
+    for (int my = 0; my < matte_h; ++my) {
       Elements row;
-      for (int x = 0; x < ascii_art_width_; ++x) {
-        const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
-        const bool is_revealed = reveal_all || (idx < ascii_revealed_.size() && ascii_revealed_[idx]);
-        const std::string base_glyph = (idx < ascii_base_glyphs_.size()) ? ascii_base_glyphs_[idx] : " ";
-        const bool is_drawable = !base_glyph.empty();
+      row.reserve(static_cast<size_t>(matte_w));
+      for (int mx = 0; mx < matte_w; ++mx) {
+        const int x = mx - kMattePaddingX;
+        const int y = my - kMattePaddingY;
+        const bool in_photo = (x >= 0 && x < ascii_art_width_ && y >= 0 && y < ascii_art_height_);
 
-        std::string out = base_glyph;
-        if (is_drawable && !is_revealed && idx < ascii_scrambled_chars_.size() &&
-            !ascii_scrambled_chars_[idx].empty()) {
-          out = ascii_scrambled_chars_[idx];
+        if (in_photo) {
+          const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
+          const bool is_revealed = reveal_all || (idx < ascii_revealed_.size() && ascii_revealed_[idx]);
+          const std::string base_glyph = (idx < ascii_base_glyphs_.size()) ? ascii_base_glyphs_[idx] : " ";
+          const bool is_drawable = !base_glyph.empty();
+
+          std::string out = base_glyph;
+          if (is_drawable && !is_revealed && idx < ascii_scrambled_chars_.size() &&
+              !ascii_scrambled_chars_[idx].empty()) {
+            out = ascii_scrambled_chars_[idx];
+          }
+
+          auto cell = ftxui::text(out);
+          if (is_drawable && is_revealed && idx < ascii_color_assigned_.size() &&
+              ascii_color_assigned_[idx] && idx < ascii_revealed_colors_.size() &&
+              idx < ascii_revealed_bg_colors_.size()) {
+            cell = cell | ftxui::color(ascii_revealed_colors_[idx]) |
+                   ftxui::bgcolor(ascii_revealed_bg_colors_[idx]);
+          } else if (is_drawable && !is_revealed && idx < ascii_scrambled_colors_.size() &&
+                     idx < ascii_scrambled_bg_colors_.size()) {
+            cell = cell | ftxui::color(ascii_scrambled_colors_[idx]) |
+                   ftxui::bgcolor(ascii_scrambled_bg_colors_[idx]);
+          }
+          row.push_back(cell);
+          continue;
         }
 
-        auto cell = ftxui::text(out);
-        if (is_drawable && is_revealed && idx < ascii_color_assigned_.size() &&
-            ascii_color_assigned_[idx] && idx < ascii_revealed_colors_.size() &&
-            idx < ascii_revealed_bg_colors_.size()) {
-          cell = cell | ftxui::color(ascii_revealed_colors_[idx]) |
-                 ftxui::bgcolor(ascii_revealed_bg_colors_[idx]);
-        } else if (is_drawable && !is_revealed && idx < ascii_scrambled_colors_.size() &&
-                   idx < ascii_scrambled_bg_colors_.size()) {
-          cell = cell | ftxui::color(ascii_scrambled_colors_[idx]) |
-                 ftxui::bgcolor(ascii_scrambled_bg_colors_[idx]);
+        if (ascii_art_width_ <= 0 || ascii_art_height_ <= 0 || ascii_base_fg_rgb_.empty() ||
+            ascii_base_bg_rgb_.empty()) {
+          row.push_back(ftxui::text(" "));
+          continue;
         }
-        row.push_back(cell);
+
+        const int nearest_x = std::clamp(x, 0, ascii_art_width_ - 1);
+        const int nearest_y = std::clamp(y, 0, ascii_art_height_ - 1);
+        const size_t edge_idx = static_cast<size_t>(nearest_y * ascii_art_width_ + nearest_x);
+
+        const int dx = (x < 0) ? -x : ((x >= ascii_art_width_) ? (x - ascii_art_width_ + 1) : 0);
+        const int dy = (y < 0) ? -y : ((y >= ascii_art_height_) ? (y - ascii_art_height_ + 1) : 0);
+        const int dist = std::max(dx, dy);
+        // Keep edge-adjacent matte cells anchored to photo edge color, then fade outward.
+        const int edge_dist = std::max(0, dist - 1);
+        const int fade_range = std::max(1, std::max(kMattePaddingX, kMattePaddingY) - 1);
+        const float t = static_cast<float>(edge_dist) / static_cast<float>(fade_range);
+
+        const std::array<uint8_t, 3> dark_fg = {26, 20, 34};
+        const std::array<uint8_t, 3> dark_bg = {12, 10, 18};
+        const std::array<uint8_t, 3> sky_fg = {148, 204, 255};
+        const std::array<uint8_t, 3> sky_bg = {78, 138, 210};
+        std::array<uint8_t, 3> fg = blend_rgb(ascii_base_fg_rgb_[edge_idx], dark_fg, t);
+        std::array<uint8_t, 3> bg = blend_rgb(ascii_base_bg_rgb_[edge_idx], dark_bg, t);
+        // Keep the matte in a sky-blue family while preserving edge-driven variation.
+        fg = blend_rgb(fg, sky_fg, 0.60f);
+        bg = blend_rgb(bg, sky_bg, 0.65f);
+
+        const uint64_t seed = (static_cast<uint64_t>(mx) << 32U) ^ static_cast<uint64_t>(my) ^
+                              (tick * 0x9e3779b97f4a7c15ULL);
+        const uint32_t h1 = hash_u32(seed);
+        const uint32_t h2 = hash_u32(seed ^ 0xa0761d6478bd642fULL);
+        const int jitter_fg = animate_matte ? (static_cast<int>(h1 % 19U) - 9) : 0;
+        const int jitter_bg = animate_matte ? (static_cast<int>(h2 % 15U) - 7) : 0;
+        for (int i = 0; i < 3; ++i) {
+          fg[static_cast<size_t>(i)] = static_cast<uint8_t>(
+              std::clamp(static_cast<int>(fg[static_cast<size_t>(i)]) + jitter_fg, 0, 255));
+          bg[static_cast<size_t>(i)] = static_cast<uint8_t>(
+              std::clamp(static_cast<int>(bg[static_cast<size_t>(i)]) + jitter_bg, 0, 255));
+        }
+
+        std::string glyph = "\xE2\x96\x92";  // ▒
+        if (animate_matte) {
+          glyph = kPixelScrambleGlyphs[static_cast<size_t>(h1 % static_cast<uint32_t>(kPixelScrambleGlyphs.size()))];
+        } else {
+          if (dist <= 2) {
+            glyph = "\xE2\x96\x93";  // ▓
+          } else if (dist <= 6) {
+            glyph = "\xE2\x96\x92";  // ▒
+          } else {
+            glyph = "\xE2\x96\x91";  // ░
+          }
+        }
+        row.push_back(ftxui::text(glyph) | ftxui::color(ftxui::Color::RGB(fg[0], fg[1], fg[2])) |
+                      ftxui::bgcolor(ftxui::Color::RGB(bg[0], bg[1], bg[2])));
       }
       lines.push_back(ftxui::hbox(std::move(row)));
     }
@@ -463,10 +579,12 @@ void App::Run() {
         ftxui::filler(),
         ftxui::vbox(std::move(lines)) | ftxui::center,
         ftxui::filler(),
+        ftxui::filler(),
     });
 
     return ftxui::vbox({
-               ftxui::text("[ PHOTO SIGNAL ]") | ftxui::bold | ftxui::center | ftxui::color(hacker_purple),
+               ftxui::text("[ DECRYPTING PHOTO SIGNAL ]") | ftxui::bold | ftxui::center |
+                   ftxui::color(hacker_purple),
                ftxui::separator(),
                centered_art | ftxui::frame | ftxui::flex,
            }) |
@@ -499,9 +617,9 @@ void App::Run() {
                       borderDouble | color(neon_frame()) |
                       size(ftxui::WIDTH, ftxui::EQUAL, 46);
     auto letter_panel = render_letter_progress(false, snapshot.score, false) |
-                        size(ftxui::WIDTH, ftxui::EQUAL, 44);
+                        size(ftxui::WIDTH, ftxui::EQUAL, 58);
     auto ascii_panel = render_ascii_progress(snapshot.score, false) |
-                       size(ftxui::WIDTH, ftxui::GREATER_THAN, 70) | flex;
+                       flex;
     return hbox({
         game_panel,
         letter_panel,
@@ -915,14 +1033,14 @@ void App::LoadAsciiArt() {
   const double inv = sample_count > 0 ? 1.0 / static_cast<double>(sample_count) : 1.0;
   const Magick::ColorRGB pad_color(sr * inv, sg * inv, sb * inv);
 
-  // Slight zoom-in: center-crop a bit to emphasize subjects.
-  const size_t expanded_w = static_cast<size_t>(std::round(static_cast<double>(image.columns()) * 0.94));
-  const size_t expanded_h = static_cast<size_t>(std::round(static_cast<double>(image.rows()) * 0.94));
+  // Keep full photo content (no center-crop).
+  const size_t expanded_w = static_cast<size_t>(std::round(static_cast<double>(image.columns()) * 1.0));
+  const size_t expanded_h = static_cast<size_t>(std::round(static_cast<double>(image.rows()) * 1.0));
   image.backgroundColor(pad_color);
   image.extent(Magick::Geometry(expanded_w, expanded_h), Magick::CenterGravity);
 
   // Render as terminal pixel art: one cell uses "▀" with top/bottom colors.
-  const int target_cell_width = 56;
+  const int target_cell_width = 68;
   const double src_w = static_cast<double>(image.columns());
   const double src_h = static_cast<double>(image.rows());
   if (src_w <= 0.0 || src_h <= 0.0) {
@@ -931,7 +1049,7 @@ void App::LoadAsciiArt() {
   const double aspect = src_h / src_w;
   int target_cell_height =
       static_cast<int>(std::round(aspect * static_cast<double>(target_cell_width) * 0.5));
-  target_cell_height = std::clamp(target_cell_height, 18, 34);
+  target_cell_height = std::clamp(target_cell_height, 14, 24);
 
   const int target_pixel_width = target_cell_width;
   const int target_pixel_height = target_cell_height * 2;
@@ -952,6 +1070,8 @@ void App::LoadAsciiArt() {
   ascii_color_assigned_.assign(total_cells, false);
   ascii_base_fg_colors_.assign(total_cells, ftxui::Color::White);
   ascii_base_bg_colors_.assign(total_cells, ftxui::Color::Black);
+  ascii_base_fg_rgb_.assign(total_cells, {255, 255, 255});
+  ascii_base_bg_rgb_.assign(total_cells, {0, 0, 0});
   ascii_revealed_colors_.assign(total_cells, ftxui::Color::White);
   ascii_revealed_bg_colors_.assign(total_cells, ftxui::Color::Black);
   ascii_scrambled_chars_.assign(total_cells, "");
@@ -979,6 +1099,10 @@ void App::LoadAsciiArt() {
 
       ascii_base_fg_colors_[idx] = ftxui::Color::RGB(tr, tg, tb);
       ascii_base_bg_colors_[idx] = ftxui::Color::RGB(br, bg, bb);
+      ascii_base_fg_rgb_[idx] = {static_cast<uint8_t>(tr), static_cast<uint8_t>(tg),
+                                 static_cast<uint8_t>(tb)};
+      ascii_base_bg_rgb_[idx] = {static_cast<uint8_t>(br), static_cast<uint8_t>(bg),
+                                 static_cast<uint8_t>(bb)};
     }
   }
 

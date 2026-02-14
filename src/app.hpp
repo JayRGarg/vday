@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <random>
 #include <string>
 #include <vector>
@@ -96,6 +98,8 @@ class App {
   std::vector<bool> ascii_color_assigned_;
   std::vector<ftxui::Color> ascii_base_fg_colors_;
   std::vector<ftxui::Color> ascii_base_bg_colors_;
+  std::vector<std::array<uint8_t, 3>> ascii_base_fg_rgb_;
+  std::vector<std::array<uint8_t, 3>> ascii_base_bg_rgb_;
   std::vector<ftxui::Color> ascii_revealed_colors_;
   std::vector<ftxui::Color> ascii_revealed_bg_colors_;
   std::vector<std::string> ascii_scrambled_chars_;

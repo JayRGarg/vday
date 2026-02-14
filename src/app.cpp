@@ -721,15 +721,15 @@ void App::Run() {
     std::string description = menu_descriptions_[menu_selected_];
     return hbox({
         vbox({
-            text("Dinner Menu") | bold | center | color(hacker_purple),
+            text("Course") | bold | center | color(hacker_purple),
             separator(),
             dinner_menu->Render() | flex | color(hacker_white),
             separator(),
             text("Esc to return") | center | color(hacker_white),
         }) |
-            borderDouble | color(neon_frame()) | size(ftxui::WIDTH, ftxui::LESS_THAN, 40),
+            borderDouble | color(neon_frame()) | size(ftxui::WIDTH, ftxui::EQUAL, 60),
         vbox({
-            text("Current Target") | bold | center | color(hacker_purple),
+            text("Ingredient Array") | bold | center | color(hacker_purple),
             separator(),
             paragraph(description) | flex | color(hacker_white),
         }) |
@@ -803,6 +803,16 @@ void App::Run() {
         }
         if (c == "r" || c == "R") {
           game_.PushInput(InputAction::Reset);
+          return true;
+        }
+        if (c == "m" || c == "M") {
+          DrainGameEvents();
+          const int total_chunks = static_cast<int>(letter_chunks_.size());
+          const auto snapshot = game_.Snapshot();
+          const int unlocked_now = std::max(progress_.unlocked_chunks, snapshot.unlocked_chunks);
+          if (total_chunks > 0 && unlocked_now >= total_chunks) {
+            set_screen(Screen::Menu);
+          }
           return true;
         }
       }

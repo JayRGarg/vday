@@ -11,6 +11,9 @@ endif()
 
 add_subdirectory(external/ftxui)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MAGICKPP REQUIRED Magick++-7.Q16HDRI)
+
 find_package(SDL2 QUIET)
 find_package(SDL2_mixer QUIET)
 
@@ -23,6 +26,8 @@ add_executable(valentine_tui
 )
 
 target_include_directories(valentine_tui PRIVATE src)
+target_include_directories(valentine_tui PRIVATE ${MAGICKPP_INCLUDE_DIRS})
+target_compile_options(valentine_tui PRIVATE ${MAGICKPP_CFLAGS_OTHER})
 
 if(SDL2_FOUND AND SDL2_mixer_FOUND)
   target_compile_definitions(valentine_tui PRIVATE HAVE_SDL2_MIXER=1)
@@ -30,6 +35,7 @@ if(SDL2_FOUND AND SDL2_mixer_FOUND)
 endif()
 
 target_link_libraries(valentine_tui PRIVATE
+  ${MAGICKPP_LIBRARIES}
   ftxui::screen
   ftxui::dom
   ftxui::component

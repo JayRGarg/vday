@@ -1,9 +1,18 @@
 #include "app.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <sstream>
+#include <stdexcept>
+#include <vector>
+
+#include <Magick++.h>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
@@ -57,6 +66,82 @@ std::string Repeat(const std::string& value, int count) {
     out += value;
   }
   return out;
+}
+
+ftxui::Element RenderParagraphsWithBlankLines(const std::string& input) {
+  using namespace ftxui;
+  Elements lines;
+  std::istringstream stream(input);
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (line.empty()) {
+      lines.push_back(text(" "));
+    } else {
+      lines.push_back(paragraph(line));
+    }
+  }
+  if (lines.empty()) {
+    lines.push_back(text(" "));
+  }
+  return vbox(std::move(lines));
+}
+
+ftxui::Color RandomValentineColor(std::mt19937& rng) {
+  struct ChannelRange {
+    int r_min;
+    int r_max;
+    int g_min;
+    int g_max;
+    int b_min;
+    int b_max;
+  };
+
+  // Weighted palette by repeating families: reds/pinks dominate, whites/blues/purples accent.
+  static constexpr std::array<ChannelRange, 10> kRanges = {
+      ChannelRange{170, 255, 20, 90, 40, 110},    // vivid red
+      ChannelRange{150, 235, 30, 105, 60, 130},   // rose red
+      ChannelRange{220, 255, 120, 210, 160, 235}, // bright pink
+      ChannelRange{200, 255, 95, 180, 145, 220},  // soft pink
+      ChannelRange{235, 255, 235, 255, 240, 255}, // white blush
+      ChannelRange{225, 250, 220, 245, 235, 255}, // warm white
+      ChannelRange{95, 170, 145, 220, 210, 255},  // sky blue
+      ChannelRange{120, 195, 170, 235, 220, 255}, // powder blue
+      ChannelRange{145, 220, 90, 170, 190, 255},  // violet
+      ChannelRange{160, 235, 105, 180, 210, 255}, // soft purple
+  };
+
+  std::uniform_int_distribution<size_t> family_dist(0, kRanges.size() - 1);
+  const ChannelRange& c = kRanges[family_dist(rng)];
+  std::uniform_int_distribution<int> r_dist(c.r_min, c.r_max);
+  std::uniform_int_distribution<int> g_dist(c.g_min, c.g_max);
+  std::uniform_int_distribution<int> b_dist(c.b_min, c.b_max);
+  return ftxui::Color::RGB(r_dist(rng), g_dist(rng), b_dist(rng));
+}
+
+bool TryFindPhotoPath(std::filesystem::path& out) {
+  const std::filesystem::path assets = std::filesystem::current_path() / "assets";
+  const std::vector<std::string> preferred = {
+      "photo.jpg", "photo.jpeg", "photo.png", "photo.webp", "photo.heic",
+  };
+  for (const auto& name : preferred) {
+    std::filesystem::path candidate = assets / name;
+    if (std::filesystem::exists(candidate)) {
+      out = candidate;
+      return true;
+    }
+  }
+  for (const auto& entry : std::filesystem::directory_iterator(assets)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const std::string ext = entry.path().extension().string();
+    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".heic" ||
+        ext == ".JPG" || ext == ".JPEG" || ext == ".PNG" || ext == ".WEBP" || ext == ".HEIC") {
+      out = entry.path();
+      return true;
+    }
+  }
+  return false;
 }
 
 ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
@@ -125,6 +210,7 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
 }  // namespace
 
 App::App() {
+  Magick::InitializeMagick(nullptr);
   menu_items_ = {"Rose Petal Salad", "Crimson Risotto", "Heartfire Steak", "Velvet Tiramisu"};
   menu_descriptions_ = {
       "Arugula, strawberries, feta, toasted almonds, balsamic glaze.",
@@ -136,8 +222,13 @@ App::App() {
   progress_ = persistence_.Load();
   audio_requested_ = progress_.settings.audio_enabled;
   last_unlocked_ = progress_.unlocked_chunks;
+  std::random_device rd;
+  letter_rng_ = std::mt19937(rd());
 
   LoadLetter();
+  LoadMission();
+  LoadAsciiArt();
+  ApplyProgressToLetterState();
   RefreshDashboardItems();
 }
 
@@ -173,6 +264,27 @@ void App::Run() {
     }
   };
 
+  auto neon_frame = [&] {
+    using clock = std::chrono::steady_clock;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        clock::now().time_since_epoch())
+                        .count();
+    const int phase = static_cast<int>((ms / 220) % 4);
+    if (phase == 0) {
+      return Color::RGB(255, 96, 128);  // hot pink
+    }
+    if (phase == 1) {
+      return Color::RGB(255, 72, 96);  // valentine red
+    }
+    if (phase == 2) {
+      return Color::RGB(214, 112, 255);  // soft purple
+    }
+    return Color::RGB(255, 224, 240);  // blush white
+  };
+  const auto hacker_purple = Color::RGB(188, 122, 255);
+  const auto hacker_white = Color::RGB(230, 240, 255);
+  const auto mission_red = Color::RGB(255, 112, 132);
+
   auto dashboard_menu = Menu(&dashboard_items_, &dashboard_selected_);
   auto dashboard = Renderer(dashboard_menu, [&] {
     RefreshDashboardItems();
@@ -181,17 +293,40 @@ void App::Run() {
          dashboard_actions_[dashboard_selected_] != DashboardAction::ResetProgress)) {
       reset_confirm_pending_ = false;
     }
-    auto content = vbox({
-        text("Valentine's Day Terminal") | bold | center,
+    int mission_lines = 1;
+    mission_lines += static_cast<int>(std::count(mission_content_.begin(), mission_content_.end(), '\n'));
+    const int mission_panel_height = std::max(9, mission_lines + 4);
+
+    auto mission_panel = vbox({
+                            text("[ MISSION: VALENTINE_MATRIX ]") | bold | center |
+                                color(hacker_purple),
+                            separator(),
+                            RenderParagraphsWithBlankLines(mission_content_) | color(mission_red),
+                        }) |
+                        borderDouble | color(neon_frame()) |
+                        size(ftxui::HEIGHT, ftxui::EQUAL, mission_panel_height);
+
+    auto dashboard_panel = vbox({
+                             dashboard_menu->Render() | center | color(hacker_white),
+                             separator(),
+                             text([&] {
+                               const int total_chunks = std::max(1, static_cast<int>(letter_chunks_.size()));
+                               const int unlocked =
+                                   std::clamp(progress_.unlocked_chunks, 0, total_chunks);
+                               const int pct = (unlocked * 100) / total_chunks;
+                               return "Mission Progress: " + std::to_string(pct) + "%";
+                             }()) |
+                                 center | color(hacker_white),
+                             reset_confirm_pending_
+                                 ? text("Press Enter on Reset again to confirm") | center | bold
+                                 : text(""),
+                         }) |
+                         borderDouble | color(neon_frame());
+    return vbox({
+        mission_panel,
         separator(),
-        dashboard_menu->Render() | center,
-        separator(),
-        text("Progress: " + std::to_string(progress_.unlocked_chunks) + " chunks") | center,
-        text("Best Score: " + std::to_string(progress_.best_score)) | center,
-        reset_confirm_pending_ ? text("Press Enter on Reset again to confirm") | center | bold
-                               : text(""),
+        dashboard_panel | flex,
     });
-    return content | border;
   });
 
   dashboard = CatchEvent(dashboard, [&](Event event) {
@@ -234,29 +369,108 @@ void App::Run() {
     return false;
   });
 
-  auto render_letter_progress = [&](bool show_escape_hint) {
-    UpdateLetterReveal();
-    Elements blocks;
-    for (size_t i = 0; i < letter_chunks_.size(); ++i) {
-      const auto& chunk = letter_chunks_[i];
-      if (static_cast<int>(i) < progress_.unlocked_chunks) {
-        std::string visible = chunk.text.substr(0, std::min(chunk.revealed, chunk.text.size()));
-        blocks.push_back(paragraph(visible));
-      } else {
-        blocks.push_back(paragraph("[Locked - play the game to reveal more]") | dim);
+  auto render_letter_progress = [&](bool show_escape_hint, int score, bool reveal_all) {
+    UpdateLetterReveal(score, reveal_all);
+    RefreshScrambleState(reveal_all);
+    auto build_colored_letter = [&](bool reveal_all_text) {
+      Elements lines;
+      Elements current_line;
+      auto flush_line = [&] {
+        if (current_line.empty()) {
+          current_line.push_back(text(""));
+        }
+        lines.push_back(hbox(std::move(current_line)));
+        current_line.clear();
+      };
+
+      for (size_t i = 0; i < letter_content_.size(); ++i) {
+        const char ch = letter_content_[i];
+        if (ch == '\n') {
+          flush_line();
+          continue;
+        }
+
+        const bool is_space = std::isspace(static_cast<unsigned char>(ch));
+        std::string out = std::string(1, ch);
+        const bool is_revealed =
+            reveal_all_text || (i < revealed_letters_.size() && revealed_letters_[i]);
+        if (!is_space && !is_revealed && i < scrambled_letters_.size() &&
+            !scrambled_letters_[i].empty()) {
+          out = scrambled_letters_[i];
+        }
+
+        auto cell = text(out);
+        if (!is_space && is_revealed && i < revealed_color_assigned_.size() &&
+            revealed_color_assigned_[i] && i < revealed_colors_.size()) {
+          cell = cell | color(revealed_colors_[i]);
+        } else if (!is_space && !is_revealed && i < scrambled_colors_.size()) {
+          cell = cell | color(scrambled_colors_[i]);
+        }
+        current_line.push_back(cell);
       }
-    }
+      flush_line();
+      return vbox(std::move(lines));
+    };
 
     Elements content = {
-        text("Letter Reveal") | bold | center,
+        text("[ DECRYPTING LETTER STREAM ]") | bold | center | color(hacker_purple),
         separator(),
-        vbox(std::move(blocks)) | frame | flex,
+        build_colored_letter(reveal_all) | frame | flex,
     };
     if (show_escape_hint) {
       content.push_back(separator());
-      content.push_back(text("Esc to return") | center);
+      content.push_back(text("Esc to return") | center | color(hacker_white));
     }
-    return vbox(std::move(content)) | border;
+    return vbox(std::move(content)) | borderDouble | color(neon_frame());
+  };
+
+  auto render_ascii_progress = [&](int score, bool reveal_all) {
+    UpdateAsciiReveal(score, reveal_all);
+    RefreshAsciiScrambleState(reveal_all);
+
+    Elements lines;
+    for (int y = 0; y < ascii_art_height_; ++y) {
+      Elements row;
+      for (int x = 0; x < ascii_art_width_; ++x) {
+        const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
+        const bool is_revealed = reveal_all || (idx < ascii_revealed_.size() && ascii_revealed_[idx]);
+        const std::string base_glyph = (idx < ascii_base_glyphs_.size()) ? ascii_base_glyphs_[idx] : " ";
+        const bool is_drawable = !base_glyph.empty();
+
+        std::string out = base_glyph;
+        if (is_drawable && !is_revealed && idx < ascii_scrambled_chars_.size() &&
+            !ascii_scrambled_chars_[idx].empty()) {
+          out = ascii_scrambled_chars_[idx];
+        }
+
+        auto cell = ftxui::text(out);
+        if (is_drawable && is_revealed && idx < ascii_color_assigned_.size() &&
+            ascii_color_assigned_[idx] && idx < ascii_revealed_colors_.size() &&
+            idx < ascii_revealed_bg_colors_.size()) {
+          cell = cell | ftxui::color(ascii_revealed_colors_[idx]) |
+                 ftxui::bgcolor(ascii_revealed_bg_colors_[idx]);
+        } else if (is_drawable && !is_revealed && idx < ascii_scrambled_colors_.size() &&
+                   idx < ascii_scrambled_bg_colors_.size()) {
+          cell = cell | ftxui::color(ascii_scrambled_colors_[idx]) |
+                 ftxui::bgcolor(ascii_scrambled_bg_colors_[idx]);
+        }
+        row.push_back(cell);
+      }
+      lines.push_back(ftxui::hbox(std::move(row)));
+    }
+
+    auto centered_art = ftxui::vbox({
+        ftxui::filler(),
+        ftxui::vbox(std::move(lines)) | ftxui::center,
+        ftxui::filler(),
+    });
+
+    return ftxui::vbox({
+               ftxui::text("[ PHOTO SIGNAL ]") | ftxui::bold | ftxui::center | ftxui::color(hacker_purple),
+               ftxui::separator(),
+               centered_art | ftxui::frame | ftxui::flex,
+           }) |
+           ftxui::borderDouble | ftxui::color(neon_frame());
   };
 
   auto game_view = Renderer([&] {
@@ -266,27 +480,32 @@ void App::Run() {
     progress_.best_score = std::max(progress_.best_score, snapshot.score);
 
     auto stats = hbox({
-        text("Score: " + std::to_string(snapshot.score)),
-        text("  Streak: " + std::to_string(snapshot.streak)),
-        text("  Misses: " + std::to_string(snapshot.misses)),
-        text("  Unlocked: " + std::to_string(progress_.unlocked_chunks)),
-        snapshot.paused ? text("  [PAUSED]") | bold : text(""),
+        text("Score: " + std::to_string(snapshot.score)) | color(hacker_white),
+        text("  Streak: " + std::to_string(snapshot.streak)) | color(hacker_white),
+        text("  Misses: " + std::to_string(snapshot.misses)) | color(hacker_white),
+        text("  Unlocked: " + std::to_string(progress_.unlocked_chunks)) | color(hacker_white),
+        snapshot.paused ? text("  [PAUSED]") | bold | color(hacker_purple) : text(""),
     });
 
-    auto instructions = text("Arrows/A-D move  P pause  R reset  Esc back");
+    auto instructions = text("Arrows/A-D move  P pause  R reset  Esc back") | color(hacker_purple);
     auto game_panel = vbox({
-                          text("Falling Love Notes") | bold | center,
+                          text("<< LOVE_PROTOCOL.exe >>") | bold | center | color(hacker_purple),
                           separator(),
                           RenderGameCanvas(snapshot) | center,
                           separator(),
                           stats | center,
                           instructions | center,
                       }) |
-                      border;
-    auto letter_panel = render_letter_progress(false);
+                      borderDouble | color(neon_frame()) |
+                      size(ftxui::WIDTH, ftxui::EQUAL, 46);
+    auto letter_panel = render_letter_progress(false, snapshot.score, false) |
+                        size(ftxui::WIDTH, ftxui::EQUAL, 44);
+    auto ascii_panel = render_ascii_progress(snapshot.score, false) |
+                       size(ftxui::WIDTH, ftxui::GREATER_THAN, 70) | flex;
     return hbox({
-        game_panel | flex,
-        letter_panel | flex,
+        game_panel,
+        letter_panel,
+        ascii_panel,
     });
   });
 
@@ -314,7 +533,7 @@ void App::Run() {
     return false;
   });
 
-  auto letter_view = Renderer([&] { return render_letter_progress(true); });
+  auto letter_view = Renderer([&] { return render_letter_progress(true, reveal_threshold_score_, true); });
 
   letter_view = CatchEvent(letter_view, [&](Event event) {
     if (event == Event::Escape) {
@@ -327,21 +546,22 @@ void App::Run() {
   auto dinner_menu = Menu(&menu_items_, &menu_selected_);
   auto menu_view = Renderer(dinner_menu, [&] {
     std::string description = menu_descriptions_[menu_selected_];
-    auto content = hbox({
+    return hbox({
         vbox({
-            text("Dinner Menu") | bold | center,
+            text("Dinner Menu") | bold | center | color(hacker_purple),
             separator(),
-            dinner_menu->Render() | flex,
+            dinner_menu->Render() | flex | color(hacker_white),
             separator(),
-            text("Esc to return") | center,
-        }) | border | size(ftxui::WIDTH, ftxui::LESS_THAN, 40),
+            text("Esc to return") | center | color(hacker_white),
+        }) |
+            borderDouble | color(neon_frame()) | size(ftxui::WIDTH, ftxui::LESS_THAN, 40),
         vbox({
-            text("Description") | bold | center,
+            text("Current Target") | bold | center | color(hacker_purple),
             separator(),
-            paragraph(description) | flex,
-        }) | border | flex,
+            paragraph(description) | flex | color(hacker_white),
+        }) |
+            borderDouble | color(neon_frame()) | flex,
     });
-    return content;
   });
 
   menu_view = CatchEvent(menu_view, [&](Event event) {
@@ -359,13 +579,13 @@ void App::Run() {
       PushAudioEnabled(audio_requested_);
     }
     auto content = vbox({
-        text("Settings") | bold | center,
+        text("Settings") | bold | center | color(hacker_purple),
         separator(),
-        audio_checkbox->Render() | center,
+        audio_checkbox->Render() | center | color(hacker_white),
         separator(),
-        text("Esc to return") | center,
+        text("Esc to return") | center | color(hacker_white),
     });
-    return content | border;
+    return content | borderDouble | color(neon_frame());
   });
 
   settings_view = CatchEvent(settings_view, [&](Event event) {
@@ -431,7 +651,7 @@ void App::Run() {
 
   auto root_renderer = Renderer(root, [&] {
     screen.RequestAnimationFrame();
-    return root->Render();
+    return root->Render() | bgcolor(Color::Black);
   });
 
   screen.Loop(root_renderer);
@@ -452,7 +672,7 @@ void App::RefreshDashboardItems() {
   dashboard_items_.clear();
   dashboard_actions_.clear();
 
-  dashboard_items_.push_back("Start Game");
+  dashboard_items_.push_back("Start Mission");
   dashboard_actions_.push_back(DashboardAction::StartGame);
 
   if (IsGameCompleted()) {
@@ -477,15 +697,60 @@ void App::RefreshDashboardItems() {
 void App::ApplyProgressToLetterState() {
   const int unlocked = std::clamp(progress_.unlocked_chunks, 0, static_cast<int>(letter_chunks_.size()));
   progress_.unlocked_chunks = unlocked;
-  for (size_t i = 0; i < letter_chunks_.size(); ++i) {
-    auto& chunk = letter_chunks_[i];
-    if (static_cast<int>(i) < unlocked) {
-      chunk.unlocked = true;
-      chunk.revealed = std::min(chunk.revealed, chunk.text.size());
-    } else {
-      chunk.unlocked = false;
-      chunk.revealed = 0;
+  if (revealed_letters_.size() != letter_content_.size()) {
+    revealed_letters_.assign(letter_content_.size(), false);
+  }
+  if (revealed_color_assigned_.size() != letter_content_.size()) {
+    revealed_color_assigned_.assign(letter_content_.size(), false);
+    revealed_colors_.assign(letter_content_.size(), ftxui::Color::White);
+  }
+
+  const bool completed = unlocked >= static_cast<int>(letter_chunks_.size());
+  revealed_target_ = 0;
+  if (completed) {
+    for (size_t i = 0; i < letter_content_.size(); ++i) {
+      if (letter_content_[i] != '\n' &&
+          !std::isspace(static_cast<unsigned char>(letter_content_[i]))) {
+        revealed_letters_[i] = true;
+        if (!revealed_color_assigned_[i]) {
+          revealed_colors_[i] = RandomValentineColor(letter_rng_);
+          revealed_color_assigned_[i] = true;
+        }
+        revealed_target_ += 1;
+      }
     }
+  } else {
+    std::fill(revealed_letters_.begin(), revealed_letters_.end(), false);
+    std::fill(revealed_color_assigned_.begin(), revealed_color_assigned_.end(), false);
+  }
+
+  // Keep ASCII art completion state aligned with overall unlock completion.
+  if (completed && ascii_art_width_ > 0 && ascii_art_height_ > 0) {
+    ascii_revealed_target_ = 0;
+    for (int y = 0; y < ascii_art_height_; ++y) {
+      for (int x = 0; x < ascii_art_width_; ++x) {
+        const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
+        if (idx >= ascii_base_glyphs_.size() || ascii_base_glyphs_[idx].empty()) {
+          continue;
+        }
+        ascii_revealed_[idx] = true;
+        if (!ascii_color_assigned_[idx]) {
+          if (idx < ascii_base_fg_colors_.size() && idx < ascii_base_bg_colors_.size()) {
+            ascii_revealed_colors_[idx] = ascii_base_fg_colors_[idx];
+            ascii_revealed_bg_colors_[idx] = ascii_base_bg_colors_[idx];
+          } else {
+            ascii_revealed_colors_[idx] = ftxui::Color::White;
+            ascii_revealed_bg_colors_[idx] = ftxui::Color::Black;
+          }
+          ascii_color_assigned_[idx] = true;
+        }
+        ascii_revealed_target_ += 1;
+      }
+    }
+  } else {
+    ascii_revealed_target_ = 0;
+    std::fill(ascii_revealed_.begin(), ascii_revealed_.end(), false);
+    std::fill(ascii_color_assigned_.begin(), ascii_color_assigned_.end(), false);
   }
 }
 
@@ -494,8 +759,19 @@ void App::ResetProgress() {
   progress_ = ProgressData{};
   progress_.settings.audio_enabled = keep_audio_enabled;
   last_unlocked_ = 0;
+  revealed_target_ = 0;
+  std::fill(revealed_letters_.begin(), revealed_letters_.end(), false);
+  std::fill(revealed_color_assigned_.begin(), revealed_color_assigned_.end(), false);
+  ascii_revealed_target_ = 0;
+  std::fill(ascii_revealed_.begin(), ascii_revealed_.end(), false);
+  std::fill(ascii_color_assigned_.begin(), ascii_color_assigned_.end(), false);
+  last_scramble_tick_ = std::chrono::steady_clock::time_point{};
+  last_ascii_scramble_tick_ = std::chrono::steady_clock::time_point{};
+  RefreshScrambleState(false);
+  RefreshAsciiScrambleState(false);
   ApplyProgressToLetterState();
   last_reveal_tick_ = std::chrono::steady_clock::now();
+  last_ascii_reveal_tick_ = std::chrono::steady_clock::now();
   persistence_.Save(progress_);
   RefreshDashboardItems();
 }
@@ -503,39 +779,436 @@ void App::ResetProgress() {
 void App::LoadLetter() {
   std::filesystem::path path = std::filesystem::current_path() / "assets" / "letter.txt";
   std::ifstream file(path);
-  std::string content;
-  if (file.is_open()) {
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    content = buffer.str();
-  } else {
-    content = "Dear You,\n\nThis is a placeholder letter.\n\nWith love,\nMe";
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to open letter file: " + path.string());
+  }
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  std::string content = buffer.str();
+  if (content.empty()) {
+    throw std::runtime_error("Letter file is empty: " + path.string());
   }
 
   auto chunks = SplitParagraphs(content);
   letter_chunks_.clear();
   for (const auto& chunk : chunks) {
-    letter_chunks_.push_back(LetterChunk{chunk, 0u, false});
+    letter_chunks_.push_back(LetterChunk{chunk});
   }
+  letter_content_ = content;
+  revealed_letters_.assign(letter_content_.size(), false);
+  revealed_color_assigned_.assign(letter_content_.size(), false);
+  revealed_colors_.assign(letter_content_.size(), ftxui::Color::White);
+  scrambled_letters_.assign(letter_content_.size(), "");
+  scrambled_colors_.assign(letter_content_.size(), ftxui::Color::White);
+  reveal_threshold_score_ = std::max(100, static_cast<int>(letter_chunks_.size()) * 100);
+  revealed_target_ = 0;
   ApplyProgressToLetterState();
   last_unlocked_ = progress_.unlocked_chunks;
   last_reveal_tick_ = std::chrono::steady_clock::now();
-  UpdateLetterReveal();
+  last_scramble_tick_ = std::chrono::steady_clock::time_point{};
+  UpdateLetterReveal(0, false);
+  RefreshScrambleState(false);
 }
 
-void App::UpdateLetterReveal() {
+void App::LoadMission() {
+  std::filesystem::path path = std::filesystem::current_path() / "assets" / "mission.txt";
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to open mission file: " + path.string());
+  }
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  mission_content_ = buffer.str();
+  if (mission_content_.empty()) {
+    throw std::runtime_error("Mission file is empty: " + path.string());
+  }
+}
+
+void App::LoadAsciiArt() {
+  std::filesystem::path photo_path;
+  if (!TryFindPhotoPath(photo_path)) {
+    throw std::runtime_error(
+        "No photo found in assets/. Add assets/photo.jpg (or .jpeg/.png/.webp/.heic).");
+  }
+
+  Magick::Image image;
+  try {
+    image.read(photo_path.string());
+  } catch (const std::exception& e) {
+    throw std::runtime_error("Failed to read photo for ASCII conversion: " + std::string(e.what()));
+  }
+
+  // Trim letterbox/pillarbox black bars (common in screenshots) before rendering.
+  const int source_w = static_cast<int>(image.columns());
+  const int source_h = static_cast<int>(image.rows());
+  auto row_luminance = [&](int y) {
+    double sum = 0.0;
+    int samples = 0;
+    const int stride = std::max(1, source_w / 120);
+    for (int x = 0; x < source_w; x += stride) {
+      const Magick::ColorRGB c = image.pixelColor(static_cast<size_t>(x), static_cast<size_t>(y));
+      sum += 0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue();
+      samples += 1;
+    }
+    return samples > 0 ? sum / static_cast<double>(samples) : 0.0;
+  };
+  auto col_luminance = [&](int x) {
+    double sum = 0.0;
+    int samples = 0;
+    const int stride = std::max(1, source_h / 120);
+    for (int y = 0; y < source_h; y += stride) {
+      const Magick::ColorRGB c = image.pixelColor(static_cast<size_t>(x), static_cast<size_t>(y));
+      sum += 0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue();
+      samples += 1;
+    }
+    return samples > 0 ? sum / static_cast<double>(samples) : 0.0;
+  };
+
+  constexpr double kBlackBarThreshold = 0.055;
+  int top = 0;
+  int bottom = source_h - 1;
+  int left = 0;
+  int right = source_w - 1;
+  while (top < source_h - 1 && row_luminance(top) < kBlackBarThreshold) {
+    top += 1;
+  }
+  while (bottom > top && row_luminance(bottom) < kBlackBarThreshold) {
+    bottom -= 1;
+  }
+  while (left < source_w - 1 && col_luminance(left) < kBlackBarThreshold) {
+    left += 1;
+  }
+  while (right > left && col_luminance(right) < kBlackBarThreshold) {
+    right -= 1;
+  }
+  if (bottom > top && right > left) {
+    const size_t crop_w = static_cast<size_t>(right - left + 1);
+    const size_t crop_h = static_cast<size_t>(bottom - top + 1);
+    image.crop(Magick::Geometry(crop_w, crop_h, static_cast<ssize_t>(left), static_cast<ssize_t>(top)));
+  }
+
+  // Sample edge color for zoom-out padding so it blends instead of adding black pixels.
+  const int cropped_w = static_cast<int>(image.columns());
+  const int cropped_h = static_cast<int>(image.rows());
+  double sr = 0.0;
+  double sg = 0.0;
+  double sb = 0.0;
+  int sample_count = 0;
+  const int edge_stride_x = std::max(1, cropped_w / 80);
+  const int edge_stride_y = std::max(1, cropped_h / 80);
+  for (int x = 0; x < cropped_w; x += edge_stride_x) {
+    const Magick::ColorRGB t = image.pixelColor(static_cast<size_t>(x), 0);
+    const Magick::ColorRGB b = image.pixelColor(static_cast<size_t>(x), static_cast<size_t>(cropped_h - 1));
+    sr += t.red() + b.red();
+    sg += t.green() + b.green();
+    sb += t.blue() + b.blue();
+    sample_count += 2;
+  }
+  for (int y = 0; y < cropped_h; y += edge_stride_y) {
+    const Magick::ColorRGB l = image.pixelColor(0, static_cast<size_t>(y));
+    const Magick::ColorRGB r = image.pixelColor(static_cast<size_t>(cropped_w - 1), static_cast<size_t>(y));
+    sr += l.red() + r.red();
+    sg += l.green() + r.green();
+    sb += l.blue() + r.blue();
+    sample_count += 2;
+  }
+  const double inv = sample_count > 0 ? 1.0 / static_cast<double>(sample_count) : 1.0;
+  const Magick::ColorRGB pad_color(sr * inv, sg * inv, sb * inv);
+
+  // Slight zoom-in: center-crop a bit to emphasize subjects.
+  const size_t expanded_w = static_cast<size_t>(std::round(static_cast<double>(image.columns()) * 0.94));
+  const size_t expanded_h = static_cast<size_t>(std::round(static_cast<double>(image.rows()) * 0.94));
+  image.backgroundColor(pad_color);
+  image.extent(Magick::Geometry(expanded_w, expanded_h), Magick::CenterGravity);
+
+  // Render as terminal pixel art: one cell uses "▀" with top/bottom colors.
+  const int target_cell_width = 56;
+  const double src_w = static_cast<double>(image.columns());
+  const double src_h = static_cast<double>(image.rows());
+  if (src_w <= 0.0 || src_h <= 0.0) {
+    throw std::runtime_error("Photo has invalid dimensions: " + photo_path.string());
+  }
+  const double aspect = src_h / src_w;
+  int target_cell_height =
+      static_cast<int>(std::round(aspect * static_cast<double>(target_cell_width) * 0.5));
+  target_cell_height = std::clamp(target_cell_height, 18, 34);
+
+  const int target_pixel_width = target_cell_width;
+  const int target_pixel_height = target_cell_height * 2;
+  image.filterType(Magick::PointFilter);
+  image.resize(Magick::Geometry(static_cast<size_t>(target_pixel_width),
+                                static_cast<size_t>(target_pixel_height)));
+  image.autoGamma();
+  image.autoLevel();
+
+  const int pixel_width = static_cast<int>(image.columns());
+  const int pixel_height = static_cast<int>(image.rows());
+  ascii_art_width_ = pixel_width;
+  ascii_art_height_ = pixel_height / 2;
+  ascii_base_glyphs_.assign(static_cast<size_t>(ascii_art_width_ * ascii_art_height_), "\xE2\x96\x80");
+
+  const size_t total_cells = static_cast<size_t>(ascii_art_width_ * ascii_art_height_);
+  ascii_revealed_.assign(total_cells, false);
+  ascii_color_assigned_.assign(total_cells, false);
+  ascii_base_fg_colors_.assign(total_cells, ftxui::Color::White);
+  ascii_base_bg_colors_.assign(total_cells, ftxui::Color::Black);
+  ascii_revealed_colors_.assign(total_cells, ftxui::Color::White);
+  ascii_revealed_bg_colors_.assign(total_cells, ftxui::Color::Black);
+  ascii_scrambled_chars_.assign(total_cells, "");
+  ascii_scrambled_colors_.assign(total_cells, ftxui::Color::White);
+  ascii_scrambled_bg_colors_.assign(total_cells, ftxui::Color::Black);
+
+  for (int y = 0; y < ascii_art_height_; ++y) {
+    for (int x = 0; x < ascii_art_width_; ++x) {
+      const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
+      const int top_y = std::min(pixel_height - 1, y * 2);
+      const int bottom_y = std::min(pixel_height - 1, y * 2 + 1);
+      const int px = std::min(pixel_width - 1, x);
+
+      const Magick::ColorRGB top_color =
+          image.pixelColor(static_cast<size_t>(px), static_cast<size_t>(top_y));
+      const Magick::ColorRGB bottom_color =
+          image.pixelColor(static_cast<size_t>(px), static_cast<size_t>(bottom_y));
+
+      const int tr = std::clamp(static_cast<int>(std::round(top_color.red() * 255.0)), 0, 255);
+      const int tg = std::clamp(static_cast<int>(std::round(top_color.green() * 255.0)), 0, 255);
+      const int tb = std::clamp(static_cast<int>(std::round(top_color.blue() * 255.0)), 0, 255);
+      const int br = std::clamp(static_cast<int>(std::round(bottom_color.red() * 255.0)), 0, 255);
+      const int bg = std::clamp(static_cast<int>(std::round(bottom_color.green() * 255.0)), 0, 255);
+      const int bb = std::clamp(static_cast<int>(std::round(bottom_color.blue() * 255.0)), 0, 255);
+
+      ascii_base_fg_colors_[idx] = ftxui::Color::RGB(tr, tg, tb);
+      ascii_base_bg_colors_[idx] = ftxui::Color::RGB(br, bg, bb);
+    }
+  }
+
+  ascii_revealed_target_ = 0;
+  last_ascii_reveal_tick_ = std::chrono::steady_clock::now();
+  last_ascii_scramble_tick_ = std::chrono::steady_clock::time_point{};
+  UpdateAsciiReveal(0, false);
+  RefreshAsciiScrambleState(false);
+}
+
+void App::UpdateLetterReveal(int score, bool reveal_all) {
   auto now = std::chrono::steady_clock::now();
-  if (now - last_reveal_tick_ < std::chrono::milliseconds(50)) {
+  if (now - last_reveal_tick_ < std::chrono::milliseconds(90)) {
     return;
   }
   last_reveal_tick_ = now;
 
-  for (size_t i = 0; i < letter_chunks_.size(); ++i) {
-    if (static_cast<int>(i) < progress_.unlocked_chunks) {
-      auto& chunk = letter_chunks_[i];
-      chunk.unlocked = true;
-      chunk.revealed = std::min(chunk.text.size(), chunk.revealed + static_cast<size_t>(3));
+  int revealable_count = 0;
+  std::vector<size_t> hidden_indices;
+  hidden_indices.reserve(letter_content_.size());
+  for (size_t i = 0; i < letter_content_.size(); ++i) {
+    const char ch = letter_content_[i];
+    if (ch == '\n' || std::isspace(static_cast<unsigned char>(ch))) {
+      continue;
     }
+    revealable_count += 1;
+    if (!revealed_letters_[i]) {
+      hidden_indices.push_back(i);
+    }
+  }
+
+  int desired_reveal = 0;
+  if (reveal_all || score >= reveal_threshold_score_) {
+    desired_reveal = revealable_count;
+  } else if (reveal_threshold_score_ > 0) {
+    const float ratio = std::clamp(static_cast<float>(score) / static_cast<float>(reveal_threshold_score_),
+                                   0.0f, 1.0f);
+    desired_reveal = static_cast<int>(ratio * static_cast<float>(revealable_count));
+  }
+
+  revealed_target_ = std::max(revealed_target_, desired_reveal);
+  const int missing = revealed_target_ - (revealable_count - static_cast<int>(hidden_indices.size()));
+  if (missing <= 0 || hidden_indices.empty()) {
+    return;
+  }
+
+  std::shuffle(hidden_indices.begin(), hidden_indices.end(), letter_rng_);
+  const int to_reveal = std::min<int>(missing, static_cast<int>(hidden_indices.size()));
+  for (int i = 0; i < to_reveal; ++i) {
+    const size_t idx = hidden_indices[i];
+    revealed_letters_[idx] = true;
+    if (!revealed_color_assigned_[idx]) {
+      revealed_colors_[idx] = RandomValentineColor(letter_rng_);
+      revealed_color_assigned_[idx] = true;
+    }
+  }
+}
+
+void App::RefreshScrambleState(bool reveal_all) {
+  if (scrambled_letters_.size() != letter_content_.size()) {
+    scrambled_letters_.assign(letter_content_.size(), "");
+    scrambled_colors_.assign(letter_content_.size(), ftxui::Color::White);
+  }
+  if (reveal_all) {
+    return;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  if (now - last_scramble_tick_ < std::chrono::milliseconds(scramble_interval_ms_)) {
+    return;
+  }
+  last_scramble_tick_ = now;
+
+  static const std::vector<std::string> kCrypticGlyphs = {
+      "Ж", "Ψ", "Δ", "Ξ", "Л", "Й", "Ф", "Я",
+      "Ø", "Ⱥ", "¿", "§", "Ƶ", "Ʃ", "Ƭ", "Ɣ",
+  };
+  std::uniform_int_distribution<size_t> glyph_dist(0, kCrypticGlyphs.size() - 1);
+  constexpr float kMutationRatio = 0.35f;
+  std::vector<size_t> mutable_indices;
+  mutable_indices.reserve(letter_content_.size());
+
+  for (size_t i = 0; i < letter_content_.size(); ++i) {
+    const char ch = letter_content_[i];
+    const bool is_space = (ch == '\n') || std::isspace(static_cast<unsigned char>(ch));
+    const bool is_revealed = i < revealed_letters_.size() && revealed_letters_[i];
+    if (is_space || is_revealed) {
+      continue;
+    }
+    mutable_indices.push_back(i);
+    if (scrambled_letters_[i].empty()) {
+      scrambled_letters_[i] = kCrypticGlyphs[glyph_dist(letter_rng_)];
+      scrambled_colors_[i] = RandomValentineColor(letter_rng_);
+    }
+  }
+
+  if (mutable_indices.empty()) {
+    return;
+  }
+
+  std::shuffle(mutable_indices.begin(), mutable_indices.end(), letter_rng_);
+  int to_mutate = static_cast<int>(mutable_indices.size() * kMutationRatio);
+  to_mutate = std::clamp(to_mutate, 1, static_cast<int>(mutable_indices.size()));
+
+  for (int i = 0; i < to_mutate; ++i) {
+    const size_t idx = mutable_indices[static_cast<size_t>(i)];
+    scrambled_letters_[idx] = kCrypticGlyphs[glyph_dist(letter_rng_)];
+    scrambled_colors_[idx] = RandomValentineColor(letter_rng_);
+  }
+}
+
+void App::UpdateAsciiReveal(int score, bool reveal_all) {
+  auto now = std::chrono::steady_clock::now();
+  if (now - last_ascii_reveal_tick_ < std::chrono::milliseconds(90)) {
+    return;
+  }
+  last_ascii_reveal_tick_ = now;
+
+  if (ascii_art_width_ <= 0 || ascii_art_height_ <= 0) {
+    return;
+  }
+
+  int revealable_count = 0;
+  std::vector<size_t> hidden_indices;
+  hidden_indices.reserve(static_cast<size_t>(ascii_art_width_ * ascii_art_height_));
+  for (int y = 0; y < ascii_art_height_; ++y) {
+    for (int x = 0; x < ascii_art_width_; ++x) {
+      const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
+      const std::string glyph = (idx < ascii_base_glyphs_.size()) ? ascii_base_glyphs_[idx] : "";
+      if (glyph.empty()) {
+        continue;
+      }
+      revealable_count += 1;
+      if (idx < ascii_revealed_.size() && !ascii_revealed_[idx]) {
+        hidden_indices.push_back(idx);
+      }
+    }
+  }
+
+  int desired_reveal = 0;
+  if (reveal_all || score >= reveal_threshold_score_) {
+    desired_reveal = revealable_count;
+  } else if (reveal_threshold_score_ > 0) {
+    const float ratio = std::clamp(static_cast<float>(score) / static_cast<float>(reveal_threshold_score_),
+                                   0.0f, 1.0f);
+    desired_reveal = static_cast<int>(ratio * static_cast<float>(revealable_count));
+  }
+
+  ascii_revealed_target_ = std::max(ascii_revealed_target_, desired_reveal);
+  const int missing = ascii_revealed_target_ - (revealable_count - static_cast<int>(hidden_indices.size()));
+  if (missing <= 0 || hidden_indices.empty()) {
+    return;
+  }
+
+  std::shuffle(hidden_indices.begin(), hidden_indices.end(), letter_rng_);
+  const int to_reveal = std::min<int>(missing, static_cast<int>(hidden_indices.size()));
+  for (int i = 0; i < to_reveal; ++i) {
+    const size_t idx = hidden_indices[static_cast<size_t>(i)];
+    ascii_revealed_[idx] = true;
+    if (!ascii_color_assigned_[idx]) {
+      if (idx < ascii_base_fg_colors_.size() && idx < ascii_base_bg_colors_.size()) {
+        ascii_revealed_colors_[idx] = ascii_base_fg_colors_[idx];
+        ascii_revealed_bg_colors_[idx] = ascii_base_bg_colors_[idx];
+      } else {
+        ascii_revealed_colors_[idx] = ftxui::Color::White;
+        ascii_revealed_bg_colors_[idx] = ftxui::Color::Black;
+      }
+      ascii_color_assigned_[idx] = true;
+    }
+  }
+}
+
+void App::RefreshAsciiScrambleState(bool reveal_all) {
+  const size_t total_cells = static_cast<size_t>(std::max(0, ascii_art_width_ * ascii_art_height_));
+  if (ascii_scrambled_chars_.size() != total_cells) {
+    ascii_scrambled_chars_.assign(total_cells, "");
+    ascii_scrambled_colors_.assign(total_cells, ftxui::Color::White);
+    ascii_scrambled_bg_colors_.assign(total_cells, ftxui::Color::Black);
+  }
+  if (reveal_all || ascii_art_width_ <= 0 || ascii_art_height_ <= 0) {
+    return;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  if (now - last_ascii_scramble_tick_ < std::chrono::milliseconds(ascii_scramble_interval_ms_)) {
+    return;
+  }
+  last_ascii_scramble_tick_ = now;
+
+  static const std::vector<std::string> kPixelScrambleGlyphs = {
+      "\xE2\x96\x88",  // █
+      "\xE2\x96\x93",  // ▓
+      "\xE2\x96\x92",  // ▒
+      "\xE2\x96\x91",  // ░
+      "\xE2\x96\x80",  // ▀
+      "\xE2\x96\x84",  // ▄
+  };
+  std::uniform_int_distribution<size_t> glyph_dist(0, kPixelScrambleGlyphs.size() - 1);
+  constexpr float kMutationRatio = 0.35f;
+
+  std::vector<size_t> mutable_indices;
+  mutable_indices.reserve(total_cells);
+  for (int y = 0; y < ascii_art_height_; ++y) {
+    for (int x = 0; x < ascii_art_width_; ++x) {
+      const size_t idx = static_cast<size_t>(y * ascii_art_width_ + x);
+      const std::string glyph = (idx < ascii_base_glyphs_.size()) ? ascii_base_glyphs_[idx] : "";
+      if (glyph.empty() || (idx < ascii_revealed_.size() && ascii_revealed_[idx])) {
+        continue;
+      }
+      mutable_indices.push_back(idx);
+      if (ascii_scrambled_chars_[idx].empty()) {
+        ascii_scrambled_chars_[idx] = kPixelScrambleGlyphs[glyph_dist(letter_rng_)];
+        ascii_scrambled_colors_[idx] = RandomValentineColor(letter_rng_);
+        ascii_scrambled_bg_colors_[idx] = RandomValentineColor(letter_rng_);
+      }
+    }
+  }
+
+  if (mutable_indices.empty()) {
+    return;
+  }
+
+  std::shuffle(mutable_indices.begin(), mutable_indices.end(), letter_rng_);
+  int to_mutate = static_cast<int>(mutable_indices.size() * kMutationRatio);
+  to_mutate = std::clamp(to_mutate, 1, static_cast<int>(mutable_indices.size()));
+  for (int i = 0; i < to_mutate; ++i) {
+    const size_t idx = mutable_indices[static_cast<size_t>(i)];
+    ascii_scrambled_chars_[idx] = kPixelScrambleGlyphs[glyph_dist(letter_rng_)];
+    ascii_scrambled_colors_[idx] = RandomValentineColor(letter_rng_);
+    ascii_scrambled_bg_colors_[idx] = RandomValentineColor(letter_rng_);
   }
 }
 

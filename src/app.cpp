@@ -247,12 +247,13 @@ ftxui::Element RenderGameCanvas(const GameSnapshot& snapshot) {
 
 App::App() {
   Magick::InitializeMagick(nullptr);
-  menu_items_ = {"Rose Petal Salad", "Crimson Risotto", "Heartfire Steak", "Velvet Tiramisu"};
+  menu_items_ = {"Mediterranean Salad", "Lovers Pasta", "Frozen Chocolate Fruit", "Sparkling Nature Drink"};
   menu_descriptions_ = {
-      "Arugula, strawberries, feta, toasted almonds, balsamic glaze.",
-      "Beet-infused risotto with parmesan and herb oil.",
-      "Char-grilled sirloin with smoked pepper butter.",
-      "Coffee-soaked layers, cacao, and berry syrup.",
+      "Tomato, avocado, butter lettuce, and a Mediterranean spice blend.",
+      "Heart-shaped pasta from Italy, the finest plant-based ground meat, vodka sauce, an Italian spice "
+      "blend, and the finest cheese in the land.",
+      "Frozen chocolate-covered fruit with a customized yogurt topping.",
+      "The finest sparkling water in all the land with nature's freshest treats mixed in.",
   };
 
   progress_ = persistence_.Load();
